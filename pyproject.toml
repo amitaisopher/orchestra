@@ -11,6 +11,7 @@ dependencies = [
     "aws-cdk-lib==2.215.0",
     "boto3>=1.40.55",
     "constructs>=10.0.0,<11.0.0",
+    "dotenv>=0.9.9",
 ]
 
 [project.scripts]
@@ -25,3 +26,7 @@ dev = [
     "pytest>=8.4.2",
     "ruff>=0.14.1",
 ]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "UP", "B", "ANN", "COM"]

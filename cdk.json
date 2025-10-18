@@ -1,5 +1,5 @@
 {
-  "app": "uv run --no-sync python app.py",
+  "app": "uv run --no-sync python -m src.app",
   "watch": {
     "include": [
       "**"

@@ -3,6 +3,7 @@ import aws_cdk.assertions as assertions
 
 from orchestra.orchestra_stack import OrchestraStack
 
+
 # example tests. To run these tests, uncomment this file along with the example
 # resource in orchestra/orchestra_stack.py
 def test_sqs_queue_created():
