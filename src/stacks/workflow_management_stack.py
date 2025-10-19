@@ -111,3 +111,12 @@ class WorkflowManagementStack(Stack):
             sources=[s3deploy.Source.asset("web/workflow-dashboard/dist")],
             destination_bucket=site_bucket,
         )
+        
+        # Outputs for easy access
+        from aws_cdk import CfnOutput
+        CfnOutput(
+            self,
+            "DashboardUrl",
+            value=site_bucket.bucket_website_url,
+            description="Workflow Dashboard URL",
+        )

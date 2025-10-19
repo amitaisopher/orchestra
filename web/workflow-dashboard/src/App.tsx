@@ -34,15 +34,54 @@ export default function App() {
 }
 
 function StartWorkflow({ apiBase, onStarted }:{ apiBase:string; onStarted:(id:string)=>void }) {
-  const [id, setId] = useState('wf-' + Date.now()); const disabled = !apiBase
+  const [isLoading, setIsLoading] = useState(false)
+  const disabled = !apiBase || isLoading
+  
   const start = async () => {
-    const res = await fetch(`${apiBase}/workflows`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ workflowId:id }) })
-    if (res.ok) onStarted(id)
+    // Generate a new workflow ID automatically
+    const workflowId = `wf-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
+    
+    setIsLoading(true)
+    try {
+      const res = await fetch(`${apiBase}/workflows`, { 
+        method:'POST', 
+        headers:{'Content-Type':'application/json'}, 
+        body: JSON.stringify({ workflowId }) 
+      })
+      
+      if (res.ok) {
+        onStarted(workflowId)
+      } else {
+        console.error('Failed to start workflow:', await res.text())
+        alert('Failed to start workflow. Please try again.')
+      }
+    } catch (error) {
+      console.error('Error starting workflow:', error)
+      alert('Error starting workflow. Please try again.')
+    } finally {
+      setIsLoading(false)
+    }
   }
+  
   return (
-    <div style={{ display:'grid', gap:8 }}>
-      <input value={id} onChange={e=>setId(e.target.value)} placeholder="workflow id" />
-      <button disabled={disabled} onClick={start}>Start workflow</button>
+    <div style={{ marginBottom: 16 }}>
+      <button 
+        disabled={disabled} 
+        onClick={start}
+        style={{
+          width: '100%',
+          padding: '12px 16px',
+          backgroundColor: disabled ? '#ccc' : '#007bff',
+          color: 'white',
+          border: 'none',
+          borderRadius: '4px',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          fontSize: '14px',
+          fontWeight: '500'
+        }}
+      >
+        {isLoading ? 'Starting...' : 'Start New Workflow'}
+      </button>
     </div>
   )
 }

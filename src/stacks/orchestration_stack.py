@@ -215,12 +215,12 @@ class OrchestrationStack(Stack):
             environment={
                 "TABLE_NAME": workflow_state_table.table_name,
                 "WORKER_ARN": "to_be_patched",
-                # Optional: pass task ARNs here if you want direct-start without the test script supplying them
-                # "LAMBDA_A_ARN": lambda_a.function_arn,
-                # "LAMBDA_B1_ARN": lambda_b1.function_arn,
-                # "LAMBDA_B2_ARN": lambda_b2.function_arn,
-                # "LAMBDA_B3_ARN": lambda_b3.function_arn,
-                # "LAMBDA_C_ARN": lambda_c.function_arn,
+                # Pass task ARNs so orchestrator can start workflows directly
+                "LAMBDA_A_ARN": lambda_a.function_arn,
+                "LAMBDA_B1_ARN": lambda_b1.function_arn,
+                "LAMBDA_B2_ARN": lambda_b2.function_arn,
+                "LAMBDA_B3_ARN": lambda_b3.function_arn,
+                "LAMBDA_C_ARN": lambda_c.function_arn,
             },
             log_group=logs.LogGroup(
                 self,
