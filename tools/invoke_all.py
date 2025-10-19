@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import time
-import sys
 from typing import Any
 
 import boto3
@@ -17,7 +16,14 @@ def _invoke_lambda(client, function_name: str) -> dict[str, Any]:
     resp = client.invoke(FunctionName=function_name,
                          InvocationType="RequestResponse")
     payload = resp.get("Payload")
-    return json.loads(payload.read().decode("utf-8")) if payload else {}
+    if not payload:
+        return {}
+
+    payload_data = payload.read().decode("utf-8")
+    if not payload_data.strip():
+        return {}
+
+    return json.loads(payload_data)
 
 
 def get_lambda_names_from_exports(cloudformation_client, stack_name: str) -> dict[str, str]:
@@ -25,21 +31,21 @@ def get_lambda_names_from_exports(cloudformation_client, stack_name: str) -> dic
     try:
         exports = cloudformation_client.list_exports()["Exports"]
         lambda_names = {}
-        
+
         export_mapping = {
             f"{stack_name}-LambdaA-Name": "A",
-            f"{stack_name}-LambdaB1-Name": "B1", 
+            f"{stack_name}-LambdaB1-Name": "B1",
             f"{stack_name}-LambdaB2-Name": "B2",
             f"{stack_name}-LambdaB3-Name": "B3",
             f"{stack_name}-LambdaC-Name": "C",
         }
-        
+
         for export in exports:
             export_name = export["Name"]
             if export_name in export_mapping:
                 key = export_mapping[export_name]
                 lambda_names[key] = export["Value"]
-                
+
         return lambda_names
     except Exception as exc:
         print(f"Failed to get exports: {exc}")
@@ -52,7 +58,8 @@ def main() -> None:
     parser.add_argument("--state-machine-arn", required=False)
     parser.add_argument("--orchestrator-arn", required=False)
     parser.add_argument("--region", default=os.environ.get("AWS_REGION"))
-    parser.add_argument("--stack-name", default="OrchestrationStack", help="CDK stack name for exports")
+    parser.add_argument(
+        "--stack-name", default="OrchestrationStack", help="CDK stack name for exports")
 
     args = parser.parse_args()
 
@@ -64,7 +71,14 @@ def main() -> None:
     lambda_names = get_lambda_names_from_exports(cfn, args.stack_name)
     if not lambda_names:
         print("Warning: Could not get Lambda names from exports, falling back to hardcoded names")
-        sys.exit(1)
+        # Fallback to hardcoded names for testing
+        lambda_names = {
+            "A": "orchestration-lambda-a",
+            "B1": "orchestration-lambda-b1",
+            "B2": "orchestration-lambda-b2",
+            "B3": "orchestration-lambda-b3",
+            "C": "orchestration-lambda-c",
+        }
 
     # print("\n=== Directly invoking individual Lambdas (smoke test) ===")
     # for k, name in lambda_names.items():
@@ -77,7 +91,8 @@ def main() -> None:
     # Step Functions execution
     if args.state_machine_arn:
         print("\n=== Step Functions execution ===")
-        exec_resp = sfn.start_execution(stateMachineArn=args.state_machine_arn, input=json.dumps({}))
+        exec_resp = sfn.start_execution(
+            stateMachineArn=args.state_machine_arn, input=json.dumps({}))
         exec_arn = exec_resp["executionArn"]
         print("Started:", exec_arn)
         while True:
@@ -99,7 +114,8 @@ def main() -> None:
         for k, name in lambda_names.items():  # Changed from LAMBDA_NAMES
             conf = lam.get_function(FunctionName=name)
             lambdas[k] = conf["Configuration"]["FunctionArn"]
-        payload = {"mode": "start", "workflowId": workflow_id, "lambdas": lambdas}
+        payload = {"mode": "start",
+                   "workflowId": workflow_id, "lambdas": lambdas}
         lam.invoke(
             FunctionName=orchestrator,
             InvocationType="RequestResponse",

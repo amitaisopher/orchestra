@@ -6,6 +6,7 @@ from typing import Any
 
 import boto3
 from botocore.client import BaseClient
+from botocore.exceptions import ClientError
 
 from .workflow_types import TaskExecutionRequest
 
@@ -13,7 +14,7 @@ TABLE_NAME = os.environ["TABLE_NAME"]
 WORKER_ARN = os.environ["WORKER_ARN"]
 
 ddb: BaseClient = boto3.client("dynamodb")
-ddb_res= boto3.resource("dynamodb")
+ddb_res = boto3.resource("dynamodb")
 table = ddb_res.Table(TABLE_NAME)
 lambda_client: BaseClient = boto3.client("lambda")
 
@@ -30,19 +31,17 @@ def _sk_task(task_id: str) -> str:
     return f"TASK#{task_id}"
 
 
-
-
 def _invoke_worker(req: TaskExecutionRequest) -> None:
     # Convert TaskExecutionRequest to serializable dict
     payload = {
         "workflowId": req["workflowId"],
-        "taskId": req["taskId"], 
+        "taskId": req["taskId"],
         "targetLambdaArn": req["targetLambdaArn"],
         "expectedVersion": req["expectedVersion"],
         "deadlineMs": req["deadlineMs"],
         "correlationId": req["correlationId"],
     }
-    
+
     lambda_client.invoke(
         FunctionName=WORKER_ARN,
         InvocationType="Event",
@@ -116,7 +115,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     """Two modes:
     1) Direct invocation with { "mode": "start", "workflowId": "..." }
     2) DynamoDB Stream event to fan-out dependents when tasks complete
-    
+
     Examle event for direct start:
     {
         "mode": "start",
@@ -129,7 +128,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             "C": "arn:aws:lambda:eu-central-1:757433692112:function:OrchestrationStack-LambdaCAACE7A4E-z7cpMqDhFM5d"
         }
     }
-    
+
     """
     # Direct start?
     if isinstance(event, dict) and event.get("mode") == "start":
@@ -178,11 +177,13 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                     Key={"pk": {"S": pk}, "sk": {"S": _sk_task(dep)}},
                     UpdateExpression="SET remainingDeps = remainingDeps - :one",
                     ConditionExpression="remainingDeps > :zero",
-                    ExpressionAttributeValues={":one": {"N": "1"}, ":zero": {"N": "0"}},
+                    ExpressionAttributeValues={
+                        ":one": {"N": "1"}, ":zero": {"N": "0"}},
                     ReturnValues="ALL_NEW",
                 )
                 new_vals = resp.get("Attributes", {})
-                new_remaining = int(new_vals.get("remainingDeps", {}).get("N", "0"))
+                new_remaining = int(new_vals.get(
+                    "remainingDeps", {}).get("N", "0"))
                 if new_remaining == 0:
                     # Mark READY if PENDING
                     try:
@@ -199,8 +200,10 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                             },
                             ReturnValues="ALL_NEW",
                         )
-                        dep_target = new_vals.get("targetLambdaArn", {}).get("S")
-                        dep_version = int(new_vals.get("version", {}).get("N", "0")) + 1
+                        dep_target = new_vals.get(
+                            "targetLambdaArn", {}).get("S")
+                        dep_version = int(new_vals.get(
+                            "version", {}).get("N", "0")) + 1
                         _invoke_worker(
                             TaskExecutionRequest(
                                 workflowId=workflow_id,
@@ -211,9 +214,11 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                                 correlationId=workflow_id,
                             ),
                         )
-                    except ddb.exceptions.ConditionalCheckFailedException:  # type: ignore[attr-defined]
-                        pass
-            except ddb.exceptions.ConditionalCheckFailedException:  # type: ignore[attr-defined]
-                pass
+                    except ClientError as e:
+                        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                            pass
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                    pass
 
     return {"ok": True}
