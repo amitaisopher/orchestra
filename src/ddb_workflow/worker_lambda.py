@@ -9,7 +9,11 @@ import boto3
 from botocore.client import BaseClient
 from botocore.exceptions import ClientError
 
-TABLE_NAME = os.environ["TABLE_NAME"]
+
+# Lazy environment variable access for testing compatibility
+def _get_table_name() -> str:
+    return os.environ.get("TABLE_NAME", "test-table")
+
 
 ddb: BaseClient = boto3.client("dynamodb")
 lambda_client: BaseClient = boto3.client("lambda")
@@ -37,7 +41,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     # Mark RUNNING if status == READY and version matches expectedVersion
     try:
         ddb.update_item(
-            TableName=TABLE_NAME,
+            TableName=_get_table_name(),
             Key={"pk": {"S": _pk(workflow_id)}, "sk": {
                 "S": _sk_task(task_id)}},
             UpdateExpression="SET #s = :running, version = version + :one",
@@ -69,7 +73,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         result = json.loads(payload.read().decode("utf-8")) if payload else {}
         duration_ms = int((time.time() - start) * 1000)
         ddb.update_item(
-            TableName=TABLE_NAME,
+            TableName=_get_table_name(),
             Key={"pk": {"S": _pk(workflow_id)}, "sk": {
                 "S": _sk_task(task_id)}},
             UpdateExpression="SET #s = :succeeded, #res = :res, durationMs = :dur",
@@ -83,7 +87,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         return {"ok": True, "status": "SUCCEEDED", "durationMs": duration_ms}
     except Exception as exc:  # noqa: BLE001
         ddb.update_item(
-            TableName=TABLE_NAME,
+            TableName=_get_table_name(),
             Key={"pk": {"S": _pk(workflow_id)}, "sk": {
                 "S": _sk_task(task_id)}},
             UpdateExpression="SET #s = :failed, error = :err",

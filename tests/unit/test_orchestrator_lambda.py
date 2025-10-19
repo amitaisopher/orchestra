@@ -255,8 +255,8 @@ class TestStartFromTemplate:
     """Test the _start_from_template function."""
 
     @patch('src.ddb_workflow.orchestrator_lambda._invoke_worker')
-    @patch('src.ddb_workflow.orchestrator_lambda.table')
-    def test_start_from_template_basic(self, mock_table: Mock, mock_invoke_worker: Mock) -> None:
+    @patch('src.ddb_workflow.orchestrator_lambda._get_table')
+    def test_start_from_template_basic(self, mock_get_table: Mock, mock_invoke_worker: Mock) -> None:
         """Test basic workflow template seeding."""
         # Import the function to test
         from src.ddb_workflow.orchestrator_lambda import _start_from_template
@@ -272,6 +272,7 @@ class TestStartFromTemplate:
 
         # Mock the batch_writer context manager
         mock_batch_writer = MagicMock()
+        mock_table = mock_get_table.return_value
         mock_table.batch_writer.return_value.__enter__.return_value = mock_batch_writer
 
         _start_from_template(workflow_id, lambdas)
@@ -289,8 +290,8 @@ class TestStartFromTemplate:
         assert call_args["workflowId"] == workflow_id
 
     @patch('src.ddb_workflow.orchestrator_lambda._invoke_worker')
-    @patch('src.ddb_workflow.orchestrator_lambda.table')
-    def test_start_from_template_verify_items(self, mock_table: Mock, mock_invoke_worker: Mock) -> None:
+    @patch('src.ddb_workflow.orchestrator_lambda._get_table')
+    def test_start_from_template_verify_items(self, mock_get_table: Mock, mock_invoke_worker: Mock) -> None:
         """Test that correct items are created in DynamoDB."""
         from src.ddb_workflow.orchestrator_lambda import _start_from_template
 
@@ -305,6 +306,7 @@ class TestStartFromTemplate:
 
         # Mock the batch_writer context manager
         mock_batch_writer = MagicMock()
+        mock_table = mock_get_table.return_value
         mock_table.batch_writer.return_value.__enter__.return_value = mock_batch_writer
 
         _start_from_template(workflow_id, lambdas)
@@ -344,8 +346,8 @@ class TestStartFromTemplate:
         assert task_c["dependsOn"] == "B1,B2,B3"
 
     @patch('src.ddb_workflow.orchestrator_lambda._invoke_worker')
-    @patch('src.ddb_workflow.orchestrator_lambda.table')
-    def test_start_from_template_dependency_calculation(self, mock_table: Mock, mock_invoke_worker: Mock) -> None:
+    @patch('src.ddb_workflow.orchestrator_lambda._get_table')
+    def test_start_from_template_dependency_calculation(self, mock_get_table: Mock, mock_invoke_worker: Mock) -> None:
         """Test that dependencies are calculated correctly."""
         from src.ddb_workflow.orchestrator_lambda import _start_from_template
 
@@ -360,6 +362,7 @@ class TestStartFromTemplate:
 
         # Mock the batch_writer context manager
         mock_batch_writer = MagicMock()
+        mock_table = mock_get_table.return_value
         mock_table.batch_writer.return_value.__enter__.return_value = mock_batch_writer
 
         _start_from_template(workflow_id, lambdas)

@@ -440,11 +440,11 @@ class TestMainFunction:
         payload = json.loads(call_args[1]["Payload"].decode("utf-8"))
         assert payload["workflowId"] == "wf-1234567890"
 
-    @patch('tools.invoke_all.sys')
-    def test_argument_string_splitting(self, mock_sys: Mock) -> None:
+    @patch('sys.argv')
+    def test_argument_string_splitting(self, mock_argv: Mock) -> None:
         """Test the argument string splitting functionality."""
         # Mock sys.argv with a single argument string
-        mock_sys.argv = [
+        mock_argv.__getitem__.side_effect = [
             'invoke_all.py',
             '--orchestrator-arn arn:aws:lambda:us-east-1:123456789012:function:test',
         ]

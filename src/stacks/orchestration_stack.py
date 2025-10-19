@@ -14,7 +14,8 @@ from aws_cdk import aws_stepfunctions as sfn
 from aws_cdk import aws_stepfunctions_tasks as tasks
 from constructs import Construct
 
-LOCK_FILE_PATH = str(Path(__file__).resolve().parents[2] / "package-lock.json")  # adjust if using yarn/pnpm
+# adjust if using yarn/pnpm
+LOCK_FILE_PATH = str(Path(__file__).resolve().parents[2] / "package-lock.json")
 
 
 class OrchestrationStack(Stack):
@@ -76,17 +77,24 @@ class OrchestrationStack(Stack):
                 runtime=_lambda.Runtime.NODEJS_18_X,
                 timeout=Duration.seconds(30),
                 memory_size=256,
-                log_group=logs.LogGroup(self, f"{id_}LogGroup", 
+                log_group=logs.LogGroup(self, f"{id_}LogGroup",
                                         retention=logs.RetentionDays.THREE_MONTHS),
                 tracing=_lambda.Tracing.ACTIVE,
                 deps_lock_file_path=LOCK_FILE_PATH,
+                bundling=lambda_node.BundlingOptions(
+                    force_docker_bundling=False,
+                    # Use local bundling when possible to avoid Docker permission issues
+                ),
             )
             _attach_logs_policy(fn)
             return fn
 
-        lambda_a = node_lambda("LambdaA", "src/lambdas/node/lambda_a/index.mjs")
-        lambda_b1 = node_lambda("LambdaB1", "src/lambdas/node/lambda_b1/index.mjs")
-        lambda_c = node_lambda("LambdaC", "src/lambdas/node/lambda_c/index.mjs")
+        lambda_a = node_lambda(
+            "LambdaA", "src/lambdas/node/lambda_a/index.mjs")
+        lambda_b1 = node_lambda(
+            "LambdaB1", "src/lambdas/node/lambda_b1/index.mjs")
+        lambda_c = node_lambda(
+            "LambdaC", "src/lambdas/node/lambda_c/index.mjs")
 
         # Python Lambda (B2)
         lambda_b2 = _lambda.Function(
@@ -168,7 +176,8 @@ class OrchestrationStack(Stack):
                     statements=[
                         iam.PolicyStatement(
                             actions=["lambda:InvokeFunction"],
-                            resources=[fn.function_arn for fn in self.all_functions],
+                            resources=[
+                                fn.function_arn for fn in self.all_functions],
                         ),
                     ],
                 ),
@@ -185,14 +194,16 @@ class OrchestrationStack(Stack):
         )
 
         # === DDB-driven Orchestrator/Worker Lambdas ===
-        
+
         # ------------------------------------------------------------
         # 1️⃣ Define ROOT and CODE_ROOT
         # ------------------------------------------------------------
-        ROOT = Path(__file__).resolve().parents[2]  # points to your project root
-        CODE_ROOT = str(ROOT / "src")               # where your ddb_workflow package lives
+        # points to your project root
+        ROOT = Path(__file__).resolve().parents[2]
+        # where your ddb_workflow package lives
+        CODE_ROOT = str(ROOT / "src")
         # ------------------------------------------------------------
-        
+
         orchestrator = _lambda.Function(
             self,
             "OrchestratorLambda",
@@ -273,12 +284,20 @@ class OrchestrationStack(Stack):
         )
 
         # === Outputs ===
-        CfnOutput(self, "LambdaAName", value=lambda_a.function_name, export_name=f"{self.stack_name}-LambdaA-Name")
-        CfnOutput(self, "LambdaB1Name", value=lambda_b1.function_name, export_name=f"{self.stack_name}-LambdaB1-Name")
-        CfnOutput(self, "LambdaB2Name", value=lambda_b2.function_name, export_name=f"{self.stack_name}-LambdaB2-Name")
-        CfnOutput(self, "LambdaB3Name", value=lambda_b3.function_name, export_name=f"{self.stack_name}-LambdaB3-Name")
-        CfnOutput(self, "LambdaCName", value=lambda_c.function_name, export_name=f"{self.stack_name}-LambdaC-Name")
-        
-        CfnOutput(self, "OrchestratorName", value=orchestrator.function_name, export_name=f"{self.stack_name}-Orchestrator-Name")
-        CfnOutput(self, "WorkerName", value=worker.function_name, export_name=f"{self.stack_name}-Worker-Name")
-        CfnOutput(self, "StateMachineArn", value=self.state_machine.state_machine_arn, export_name=f"{self.stack_name}-StateMachine-Arn")
+        CfnOutput(self, "LambdaAName", value=lambda_a.function_name,
+                  export_name=f"{self.stack_name}-LambdaA-Name")
+        CfnOutput(self, "LambdaB1Name", value=lambda_b1.function_name,
+                  export_name=f"{self.stack_name}-LambdaB1-Name")
+        CfnOutput(self, "LambdaB2Name", value=lambda_b2.function_name,
+                  export_name=f"{self.stack_name}-LambdaB2-Name")
+        CfnOutput(self, "LambdaB3Name", value=lambda_b3.function_name,
+                  export_name=f"{self.stack_name}-LambdaB3-Name")
+        CfnOutput(self, "LambdaCName", value=lambda_c.function_name,
+                  export_name=f"{self.stack_name}-LambdaC-Name")
+
+        CfnOutput(self, "OrchestratorName", value=orchestrator.function_name,
+                  export_name=f"{self.stack_name}-Orchestrator-Name")
+        CfnOutput(self, "WorkerName", value=worker.function_name,
+                  export_name=f"{self.stack_name}-Worker-Name")
+        CfnOutput(self, "StateMachineArn", value=self.state_machine.state_machine_arn,
+                  export_name=f"{self.stack_name}-StateMachine-Arn")

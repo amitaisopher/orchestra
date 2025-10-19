@@ -2,7 +2,19 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+def _update_workflow_status(workflow_id: str) -> None:
+    """Check all tasks and update overall workflow status."""
+    try:
+        # Query all tasks for this workflow
+        response = _get_table().query(
+            KeyConditionExpression="pk = :pk",
+            FilterExpression="#type = :task_type",
+            ExpressionAttributeNames={"#type": "type"},
+            ExpressionAttributeValues={
+                ":pk": _pk(workflow_id),
+                ":task_type": "TASK"
+            }
+        )mport Any
 
 import boto3
 from botocore.client import BaseClient
@@ -10,23 +22,19 @@ from botocore.exceptions import ClientError
 
 from .workflow_types import TaskExecutionRequest
 
-
+# Lazy environment variable access for testing compatibility
 def _get_table_name() -> str:
     return os.environ.get("TABLE_NAME", "test-table")
-
 
 def _get_worker_arn() -> str:
     return os.environ.get("WORKER_ARN", "test-worker-arn")
 
+def _get_table():
+    """Get DynamoDB table resource lazily."""
+    return ddb_res.Table(_get_table_name())
 
 ddb: BaseClient = boto3.client("dynamodb")
 ddb_res = boto3.resource("dynamodb")
-
-
-def _get_table():
-    return ddb_res.Table(_get_table_name())
-
-
 lambda_client: BaseClient = boto3.client("lambda")
 
 
@@ -64,7 +72,7 @@ def _update_workflow_status(workflow_id: str) -> None:
     """Check all tasks and update overall workflow status."""
     try:
         # Query all tasks for this workflow
-        response = _get_table().query(
+        response = table.query(
             KeyConditionExpression="pk = :pk",
             FilterExpression="#type = :task_type",
             ExpressionAttributeNames={"#type": "type"},
@@ -100,7 +108,7 @@ def _update_workflow_status(workflow_id: str) -> None:
         # Update the META workflow status
         try:
             ddb.update_item(
-                TableName=_get_table_name(),
+                TableName=TABLE_NAME,
                 Key={"pk": {"S": _pk(workflow_id)}, "sk": {"S": _sk_meta()}},
                 UpdateExpression="SET #s = :status",
                 ExpressionAttributeNames={"#s": "status"},
@@ -161,7 +169,7 @@ def _start_from_template(workflow_id: str, lambdas: dict[str, str]) -> None:
         )
 
     # Write in a batch - remove _as_ddb_item() conversion
-    with _get_table().batch_writer() as batch:  # type: ignore[attr-defined]
+    with table.batch_writer() as batch:  # type: ignore[attr-defined]
         for it in items:
             batch.put_item(Item=it)  # ✅ Pass raw Python objects
 
@@ -253,7 +261,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             # Atomically decrement remainingDeps if > 0
             try:
                 resp = ddb.update_item(
-                    TableName=_get_table_name(),
+                    TableName=TABLE_NAME,
                     Key={"pk": {"S": pk}, "sk": {"S": _sk_task(dep)}},
                     UpdateExpression="SET remainingDeps = remainingDeps - :one",
                     ConditionExpression="remainingDeps > :zero",
@@ -268,7 +276,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                     # Mark READY if PENDING
                     try:
                         resp = ddb.update_item(
-                            TableName=_get_table_name(),
+                            TableName=TABLE_NAME,
                             Key={"pk": {"S": pk}, "sk": {"S": _sk_task(dep)}},
                             UpdateExpression="SET #s = :ready, version = version + :one",
                             ConditionExpression="#s = :pending",
