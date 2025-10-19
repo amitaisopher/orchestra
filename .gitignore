@@ -9,6 +9,8 @@ __pycache__
 .cdk.staging
 cdk.out
 
+# Node modules
+web/workflow-dashboard/node_modules
 
 # .env file
 .env

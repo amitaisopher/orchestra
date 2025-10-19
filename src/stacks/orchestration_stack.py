@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aws_cdk import CfnOutput
-from aws_cdk import Duration, Stack
+from aws_cdk import CfnOutput, Duration, Stack
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_ecr as ecr
 from aws_cdk import aws_iam as iam
@@ -220,6 +219,7 @@ class OrchestrationStack(Stack):
             tracing=_lambda.Tracing.ACTIVE,
         )
         _attach_logs_policy(orchestrator)
+        self.orchestrator = orchestrator
 
         worker = _lambda.Function(
             self,

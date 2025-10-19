@@ -1,12 +1,13 @@
 """Tests for worker_lambda module."""
 from __future__ import annotations
-from src.ddb_workflow.worker_lambda import _pk, _sk_task, handler
 
 import json
 import os
 from unittest.mock import Mock, patch
 
 import pytest
+
+from src.ddb_workflow.worker_lambda import _pk, _sk_task, handler
 
 # Set environment variables before importing the module
 os.environ.setdefault('TABLE_NAME', 'test-workflow-table')

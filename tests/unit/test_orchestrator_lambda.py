@@ -1,5 +1,12 @@
 """Tests for orchestrator_lambda module."""
 from __future__ import annotations
+
+import json
+import os
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
+
 from src.ddb_workflow.orchestrator_lambda import (
     _invoke_worker,
     _pk,
@@ -7,12 +14,6 @@ from src.ddb_workflow.orchestrator_lambda import (
     _sk_task,
     handler,
 )
-
-import json
-import os
-from unittest.mock import MagicMock, Mock, patch
-
-import pytest
 
 # Set environment variables before importing the module
 os.environ.setdefault('TABLE_NAME', 'test-workflow-table')

@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from src.stacks.monitoring_stack import MonitoringStack
 from src.stacks.orchestration_stack import OrchestrationStack
 from src.stacks.payload_stack import PayloadStack
+from src.stacks.workflow_management_stack import WorkflowManagementStack
 
 load_dotenv(".env")
 
@@ -42,6 +43,15 @@ MonitoringStack(
     functions=orchestration.all_functions,
     state_machine=orchestration.state_machine,
     table=payload.workflow_state_table,
+)
+
+
+WorkflowManagementStack(
+    app,
+    "WorkflowManagementStack",
+    env=env,
+    workflow_state_table=payload.workflow_state_table,
+    orchestrator_fn=orchestration.orchestrator,
 )
 
 

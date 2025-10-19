@@ -49,6 +49,62 @@ def _invoke_worker(req: TaskExecutionRequest) -> None:
     )
 
 
+def _update_workflow_status(workflow_id: str) -> None:
+    """Check all tasks and update overall workflow status."""
+    try:
+        # Query all tasks for this workflow
+        response = table.query(
+            KeyConditionExpression="pk = :pk",
+            FilterExpression="#type = :task_type",
+            ExpressionAttributeNames={"#type": "type"},
+            ExpressionAttributeValues={
+                ":pk": _pk(workflow_id),
+                ":task_type": "TASK",
+            },
+        )
+
+        tasks = response.get("Items", [])
+        if not tasks:
+            return  # No tasks found
+
+        task_statuses = [task.get("status") for task in tasks]
+
+        # Determine overall workflow status based on task states
+        if any(status == "FAILED" for status in task_statuses):
+            # If any task failed, workflow is failed
+            new_status = "FAILED"
+        elif all(status == "SUCCEEDED" for status in task_statuses):
+            # If all tasks succeeded, workflow is complete
+            new_status = "SUCCEEDED"
+        elif any(status in ["RUNNING", "READY"] for status in task_statuses):
+            # If any task is running or ready to run, workflow is running
+            new_status = "RUNNING"
+        elif any(status in ["PENDING"] for status in task_statuses):
+            # If tasks exist but none are active yet, workflow is still pending
+            new_status = "PENDING"
+        else:
+            # Default fallback
+            new_status = "PENDING"
+
+        # Update the META workflow status
+        try:
+            ddb.update_item(
+                TableName=TABLE_NAME,
+                Key={"pk": {"S": _pk(workflow_id)}, "sk": {"S": _sk_meta()}},
+                UpdateExpression="SET #s = :status",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":status": {"S": new_status}},
+                # Only update if record exists
+                ConditionExpression="attribute_exists(pk)",
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                print(f"Error updating workflow status for {workflow_id}: {e}")
+
+    except Exception as e:
+        print(f"Error in _update_workflow_status for {workflow_id}: {e}")
+
+
 def _start_from_template(workflow_id: str, lambdas: dict[str, str]) -> None:
     """Seeds the A → (B1,B2,B3) → C workflow into DynamoDB and triggers A.
 
@@ -110,6 +166,9 @@ def _start_from_template(workflow_id: str, lambdas: dict[str, str]) -> None:
         ),
     )
 
+    # Update workflow status after initial setup
+    _update_workflow_status(workflow_id)
+
 
 def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     """Two modes:
@@ -159,11 +218,21 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         typ = new_img.get("type", {}).get("S")
         status_new = new_img.get("status", {}).get("S")
         status_old = old_img.get("status", {}).get("S") if old_img else None
+
+        # Handle task completion (SUCCEEDED) for dependency management
         if typ != "TASK" or status_new != "SUCCEEDED" or status_old == "SUCCEEDED":
+            # Still update workflow status for any task status change (including FAILED)
+            if typ == "TASK" and status_new in ["SUCCEEDED", "FAILED"] and status_old != status_new:
+                pk = new_img["pk"]["S"]
+                workflow_id = pk.split("#", 1)[1]
+                _update_workflow_status(workflow_id)
             continue
         pk = new_img["pk"]["S"]
         workflow_id = pk.split("#", 1)[1]
-        task_id = new_img["taskId"]["S"]
+
+        # Update overall workflow status whenever a task completes
+        _update_workflow_status(workflow_id)
+
         dependents_csv = new_img.get("dependents", {}).get("S", "")
         if not dependents_csv:
             continue
@@ -187,7 +256,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 if new_remaining == 0:
                     # Mark READY if PENDING
                     try:
-                        upd = ddb.update_item(
+                        resp = ddb.update_item(
                             TableName=TABLE_NAME,
                             Key={"pk": {"S": pk}, "sk": {"S": _sk_task(dep)}},
                             UpdateExpression="SET #s = :ready, version = version + :one",
@@ -200,10 +269,15 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                             },
                             ReturnValues="ALL_NEW",
                         )
-                        dep_target = new_vals.get(
+
+                        # Update workflow status when task becomes ready
+                        _update_workflow_status(workflow_id)
+
+                        new_vals_ready = resp.get("Attributes", {})
+                        dep_target = new_vals_ready.get(
                             "targetLambdaArn", {}).get("S")
-                        dep_version = int(new_vals.get(
-                            "version", {}).get("N", "0")) + 1
+                        dep_version = int(new_vals_ready.get(
+                            "version", {}).get("N", "0"))
                         _invoke_worker(
                             TaskExecutionRequest(
                                 workflowId=workflow_id,
