@@ -4,42 +4,75 @@ import argparse
 import json
 import os
 import time
+import sys
 from typing import Any
 
 import boto3
+from dotenv import load_dotenv
 
-LAMBDA_NAMES = {
-    "A": os.environ.get("LAMBDA_A_NAME", "PayloadStack-OrchestrationStack-LambdaA"),
-    "B1": os.environ.get("LAMBDA_B1_NAME", "PayloadStack-OrchestrationStack-LambdaB1"),
-    "B2": os.environ.get("LAMBDA_B2_NAME", "PayloadStack-OrchestrationStack-LambdaB2"),
-    "B3": os.environ.get("LAMBDA_B3_NAME", "PayloadStack-OrchestrationStack-LambdaB3"),
-    "C": os.environ.get("LAMBDA_C_NAME", "PayloadStack-OrchestrationStack-LambdaC"),
-}
+load_dotenv(".env")
 
 
 def _invoke_lambda(client, function_name: str) -> dict[str, Any]:
-    resp = client.invoke(FunctionName=function_name, InvocationType="RequestResponse")
+    resp = client.invoke(FunctionName=function_name,
+                         InvocationType="RequestResponse")
     payload = resp.get("Payload")
     return json.loads(payload.read().decode("utf-8")) if payload else {}
 
 
+def get_lambda_names_from_exports(cloudformation_client, stack_name: str) -> dict[str, str]:
+    """Get actual Lambda function names from CloudFormation exports."""
+    try:
+        exports = cloudformation_client.list_exports()["Exports"]
+        lambda_names = {}
+        
+        export_mapping = {
+            f"{stack_name}-LambdaA-Name": "A",
+            f"{stack_name}-LambdaB1-Name": "B1", 
+            f"{stack_name}-LambdaB2-Name": "B2",
+            f"{stack_name}-LambdaB3-Name": "B3",
+            f"{stack_name}-LambdaC-Name": "C",
+        }
+        
+        for export in exports:
+            export_name = export["Name"]
+            if export_name in export_mapping:
+                key = export_mapping[export_name]
+                lambda_names[key] = export["Value"]
+                
+        return lambda_names
+    except Exception as exc:
+        print(f"Failed to get exports: {exc}")
+        return {}
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Invoke all lambdas and run orchestrations")
+    parser = argparse.ArgumentParser(
+        description="Invoke all lambdas and run orchestrations")
     parser.add_argument("--state-machine-arn", required=False)
     parser.add_argument("--orchestrator-arn", required=False)
     parser.add_argument("--region", default=os.environ.get("AWS_REGION"))
+    parser.add_argument("--stack-name", default="OrchestrationStack", help="CDK stack name for exports")
+
     args = parser.parse_args()
 
     lambda_client = boto3.client("lambda", region_name=args.region)
     sfn = boto3.client("stepfunctions", region_name=args.region)
+    cfn = boto3.client("cloudformation", region_name=args.region)
 
-    print("\n=== Directly invoking individual Lambdas (smoke test) ===")
-    for k, name in LAMBDA_NAMES.items():
-        try:
-            out = _invoke_lambda(lambda_client, name)
-            print(k, out)
-        except Exception as exc:  # noqa: BLE001
-            print(k, "ERROR:", exc)
+    # Get actual Lambda names from CloudFormation exports
+    lambda_names = get_lambda_names_from_exports(cfn, args.stack_name)
+    if not lambda_names:
+        print("Warning: Could not get Lambda names from exports, falling back to hardcoded names")
+        sys.exit(1)
+
+    # print("\n=== Directly invoking individual Lambdas (smoke test) ===")
+    # for k, name in lambda_names.items():
+    #     try:
+    #         out = _invoke_lambda(lambda_client, name)
+    #         print(k, out)
+    #     except Exception as exc:
+    #         print(k, "ERROR:", exc)
 
     # Step Functions execution
     if args.state_machine_arn:
@@ -62,14 +95,16 @@ def main() -> None:
         orchestrator = args.orchestrator_arn
         workflow_id = f"wf-{int(time.time())}"
         lambdas = {}
-        # Resolve ARNs for all functions
         lam = boto3.client("lambda", region_name=args.region)
-        for k, name in LAMBDA_NAMES.items():
+        for k, name in lambda_names.items():  # Changed from LAMBDA_NAMES
             conf = lam.get_function(FunctionName=name)
             lambdas[k] = conf["Configuration"]["FunctionArn"]
         payload = {"mode": "start", "workflowId": workflow_id, "lambdas": lambdas}
-        lam.invoke(FunctionName=orchestrator, InvocationType="RequestResponse", 
-                   Payload=json.dumps(payload).encode("utf-8"))
+        lam.invoke(
+            FunctionName=orchestrator,
+            InvocationType="RequestResponse",
+            Payload=json.dumps(payload).encode("utf-8"),
+        )
         print("Started DDB workflow:", workflow_id)
         print("(Inspect DynamoDB table to see task states transition)")
 

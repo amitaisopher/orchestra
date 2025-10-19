@@ -13,6 +13,8 @@ TABLE_NAME = os.environ["TABLE_NAME"]
 WORKER_ARN = os.environ["WORKER_ARN"]
 
 ddb: BaseClient = boto3.client("dynamodb")
+ddb_res= boto3.resource("dynamodb")
+table = ddb_res.Table(TABLE_NAME)
 lambda_client: BaseClient = boto3.client("lambda")
 
 
@@ -28,26 +30,23 @@ def _sk_task(task_id: str) -> str:
     return f"TASK#{task_id}"
 
 
-def _as_ddb_item(obj: dict[str, Any]) -> dict[str, Any]:
-    def wrap(v: Any) -> dict[str, Any]:
-        if isinstance(v, str):
-            return {"S": v}
-        if isinstance(v, int):
-            return {"N": str(v)}
-        if isinstance(v, list):
-            return {"L": [wrap(x) for x in v]}
-        if isinstance(v, dict):
-            return {"M": {k: wrap(val) for k, val in v.items()}}
-        return {"S": json.dumps(v)}
-
-    return {k: wrap(v) for k, v in obj.items()}
 
 
 def _invoke_worker(req: TaskExecutionRequest) -> None:
+    # Convert TaskExecutionRequest to serializable dict
+    payload = {
+        "workflowId": req["workflowId"],
+        "taskId": req["taskId"], 
+        "targetLambdaArn": req["targetLambdaArn"],
+        "expectedVersion": req["expectedVersion"],
+        "deadlineMs": req["deadlineMs"],
+        "correlationId": req["correlationId"],
+    }
+    
     lambda_client.invoke(
         FunctionName=WORKER_ARN,
         InvocationType="Event",
-        Payload=json.dumps(req).encode("utf-8"),
+        Payload=json.dumps(payload).encode("utf-8"),
     )
 
 
@@ -95,10 +94,10 @@ def _start_from_template(workflow_id: str, lambdas: dict[str, str]) -> None:
             },
         )
 
-    # Write in a batch
-    with ddb.batch_writer(TableName=TABLE_NAME) as batch:  # type: ignore[attr-defined]
+    # Write in a batch - remove _as_ddb_item() conversion
+    with table.batch_writer() as batch:  # type: ignore[attr-defined]
         for it in items:
-            batch.put_item(Item=_as_ddb_item(it))
+            batch.put_item(Item=it)  # ✅ Pass raw Python objects
 
     # Trigger A via worker
     _invoke_worker(
@@ -117,6 +116,20 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     """Two modes:
     1) Direct invocation with { "mode": "start", "workflowId": "..." }
     2) DynamoDB Stream event to fan-out dependents when tasks complete
+    
+    Examle event for direct start:
+    {
+        "mode": "start",
+        "workflowId": "blabla",
+        "lambdas": {
+            "A": "arn:aws:lambda:eu-central-1:757433692112:function:OrchestrationStack-LambdaAE814F098-R0A0TV2Szt8q",
+            "B1": "arn:aws:lambda:eu-central-1:757433692112:function:OrchestrationStack-LambdaB15D9C358A-qBAgLuIrxURi",
+            "B2": "arn:aws:lambda:eu-central-1:757433692112:function:OrchestrationStack-LambdaB216234463-VxFywx1PzEm9",
+            "B3": "arn:aws:lambda:eu-central-1:757433692112:function:OrchestrationStack-LambdaB390451B38-QBzZtOU51lVj",
+            "C": "arn:aws:lambda:eu-central-1:757433692112:function:OrchestrationStack-LambdaCAACE7A4E-z7cpMqDhFM5d"
+        }
+    }
+    
     """
     # Direct start?
     if isinstance(event, dict) and event.get("mode") == "start":

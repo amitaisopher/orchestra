@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from aws_cdk import CfnOutput
 from aws_cdk import Duration, Stack
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_ecr as ecr
@@ -185,11 +186,19 @@ class OrchestrationStack(Stack):
         )
 
         # === DDB-driven Orchestrator/Worker Lambdas ===
+        
+        # ------------------------------------------------------------
+        # 1️⃣ Define ROOT and CODE_ROOT
+        # ------------------------------------------------------------
+        ROOT = Path(__file__).resolve().parents[2]  # points to your project root
+        CODE_ROOT = str(ROOT / "src")               # where your ddb_workflow package lives
+        # ------------------------------------------------------------
+        
         orchestrator = _lambda.Function(
             self,
             "OrchestratorLambda",
-            code=_lambda.Code.from_asset("src/ddb_workflow"),
-            handler="orchestrator_lambda.handler",
+            code=_lambda.Code.from_asset(CODE_ROOT),
+            handler="ddb_workflow.orchestrator_lambda.handler",
             runtime=_lambda.Runtime.PYTHON_3_12,
             timeout=Duration.seconds(60),
             memory_size=512,
@@ -215,8 +224,8 @@ class OrchestrationStack(Stack):
         worker = _lambda.Function(
             self,
             "WorkerLambda",
-            code=_lambda.Code.from_asset("src/ddb_workflow"),
-            handler="worker_lambda.handler",
+            code=_lambda.Code.from_asset(CODE_ROOT),
+            handler="ddb_workflow.worker_lambda.handler",
             runtime=_lambda.Runtime.PYTHON_3_12,
             timeout=Duration.seconds(60),
             memory_size=512,
@@ -262,3 +271,14 @@ class OrchestrationStack(Stack):
                 parallelization_factor=1,
             ),
         )
+
+        # === Outputs ===
+        CfnOutput(self, "LambdaAName", value=lambda_a.function_name, export_name=f"{self.stack_name}-LambdaA-Name")
+        CfnOutput(self, "LambdaB1Name", value=lambda_b1.function_name, export_name=f"{self.stack_name}-LambdaB1-Name")
+        CfnOutput(self, "LambdaB2Name", value=lambda_b2.function_name, export_name=f"{self.stack_name}-LambdaB2-Name")
+        CfnOutput(self, "LambdaB3Name", value=lambda_b3.function_name, export_name=f"{self.stack_name}-LambdaB3-Name")
+        CfnOutput(self, "LambdaCName", value=lambda_c.function_name, export_name=f"{self.stack_name}-LambdaC-Name")
+        
+        CfnOutput(self, "OrchestratorName", value=orchestrator.function_name, export_name=f"{self.stack_name}-Orchestrator-Name")
+        CfnOutput(self, "WorkerName", value=worker.function_name, export_name=f"{self.stack_name}-Worker-Name")
+        CfnOutput(self, "StateMachineArn", value=self.state_machine.state_machine_arn, export_name=f"{self.stack_name}-StateMachine-Arn")

@@ -1,6 +1,5 @@
 import aws_cdk as core
 import aws_cdk.assertions as assertions
-
 from orchestra.orchestra_stack import OrchestraStack
 
 

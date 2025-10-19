@@ -1,10 +1,14 @@
 FROM public.ecr.aws/lambda/python:3.12
 
-# Install any deps (none required for this simple demo)
-# RUN pip install -r requirements.txt
+# Work from Lambda task root
+WORKDIR /var/task
 
-# Copy function code
-COPY app /var/task
+# Copy the package into the task root
+COPY app ./app
 
-# Command is handler in app/handler.py
+# Optional: verify contents at build time
+# RUN ls -R
+
+# The handler string is "<module>.<function>".
+# Module is "app.handler", function is "handler".
 CMD ["app.handler.handler"]
