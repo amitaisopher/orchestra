@@ -1,35 +1,39 @@
 
 # Orchestra - AWS Lambda Workflow Orchestration System
 
-A distributed workflow orchestration system built with AWS Lambda, DynamoDB, and CDK that demonstrates two different orchestration patterns: **Step Functions** and **DynamoDB-based event-driven orchestration**.
+A distributed workflow orchestration system with a web-based dashboard, built with AWS Lambda, DynamoDB, React, and CDK. The system demonstrates event-driven orchestration using DynamoDB Streams and provides a modern web interface for workflow management.
 
 ## Overview
 
-Orchestra implements a simple workflow pattern: `A → (B1, B2, B3) → C` where:
+Orchestra implements a workflow pattern: `A → (B1, B2, B3) → C` where:
 - Task A executes first
 - Tasks B1, B2, B3 execute in parallel after A completes
 - Task C executes after all B tasks complete
 
-The system demonstrates two orchestration approaches:
-1. **AWS Step Functions** - Traditional state machine orchestration
-2. **DynamoDB + Lambda** - Event-driven orchestration using DynamoDB Streams
+The system includes:
+1. **Backend**: Event-driven orchestration using DynamoDB Streams
+2. **Frontend**: React-based workflow dashboard with real-time updates
+3. **Infrastructure**: Single CDK stack deployment with API Gateway and S3 hosting
 
 ## Architecture
 
 ### Components
 
+- **Workflow Dashboard**: React SPA hosted on S3 with CloudFront CDN
+- **API Gateway**: RESTful API for workflow management
 - **Orchestrator Lambda**: Manages workflow state and dependency resolution
 - **Worker Lambda**: Executes individual tasks with idempotency guarantees
 - **Task Lambdas (A, B1, B2, B3, C)**: Business logic functions
 - **DynamoDB Table**: Stores workflow state and task dependencies
-- **Step Functions State Machine**: Alternative orchestration method
 
 ### Key Features
 
+- **Web Dashboard**: Visual workflow management with DAG visualization
+- **Real-time Status**: Live workflow status updates
 - **Idempotency**: Version-based optimistic locking prevents duplicate executions
 - **Concurrency Control**: Multiple workers can safely process tasks simultaneously
 - **Event-Driven**: Uses DynamoDB Streams for reactive coordination
-- **Fault Tolerance**: Conditional updates ensure consistency
+- **Production Ready**: CDN distribution with proper CORS handling
 
 ## Prerequisites
 
@@ -66,7 +70,21 @@ export AWS_SECRET_ACCESS_KEY=your-secret-key
 export AWS_DEFAULT_REGION=eu-central-1
 ```
 
-### 4. Install UV (Python Package Manager)
+### 4. Install Node.js and npm
+
+```bash
+# On macOS
+brew install node
+
+# On Linux
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# On Windows
+# Download and install from https://nodejs.org/
+```
+
+### 5. Install UV (Python Package Manager)
 
 ```bash
 # On macOS/Linux
@@ -84,80 +102,161 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 git clone <repository-url>
 cd orchestra
 
-# Create virtual environment and install dependencies
+# Create Python virtual environment and install dependencies
 uv venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv pip install -r requirements.txt
 ```
 
-### 2. Bootstrap CDK (First Time Only)
+### 2. Install Frontend Dependencies
+
+```bash
+cd web/workflow-dashboard
+npm install
+cd ../..
+```
+
+### 3. Bootstrap CDK (First Time Only)
 
 ```bash
 # Bootstrap CDK in your AWS account/region
 uv run cdk bootstrap
 ```
 
-### 3. Deploy Infrastructure
+### 4. Deploy Infrastructure
 
 ```bash
 # Deploy the complete stack
-uv run cdk deploy --all
+uv run cdk deploy WorkflowManagementStack
 
-# Or deploy specific stacks
-uv run cdk deploy PayloadStack
-uv run cdk deploy OrchestrationStack
+# The stack will output the API Gateway URL and CloudFront distribution URL
 ```
 
-### 4. Configure Environment Variables
+### 5. Configure Environment Variables
 
-Create a `.env` file in the project root:
-
-```bash
-AWS_REGION=eu-central-1
-# Add other environment variables as needed
-```
+The deployment will automatically configure the necessary environment variables. The CDK stack outputs will include:
+- API Gateway URL
+- CloudFront distribution URL
+- DynamoDB table name
+- Lambda function ARNs
 
 ## Usage
 
-### Running Workflows
+### Web Dashboard (Recommended)
 
-Use the provided test script to execute workflows:
+After deployment, access the workflow dashboard via the CloudFront URL:
+
+1. **Production**: Use the CloudFront distribution URL from the CDK outputs
+2. **Development**: Run the local development server (see Development section)
+
+The dashboard provides:
+- **Workflow List**: View all workflows and their current status
+- **Workflow Details**: Visual DAG representation of task dependencies
+- **Real-time Updates**: Live status updates as workflows execute
+- **Workflow Creation**: Start new workflows with custom parameters
+
+### API Endpoints
+
+The REST API provides the following endpoints:
 
 ```bash
-# Run with VS Code debugger (recommended)
-# Use the launch configuration in .vscode/launch.json
+# List all workflows
+GET /workflows
 
-# Or run directly
-uv run python tools/invoke_all.py \
-  --orchestrator-arn arn:aws:lambda:region:account:function:orchestrator \
-  --region eu-central-1 \
-  --stack-name OrchestrationStack
+# Get specific workflow details
+GET /workflows/{workflowId}
+
+# Create a new workflow
+POST /workflows
+{
+  "workflowId": "my-workflow-123",
+  "lambdas": {
+    "A": "arn:aws:lambda:region:account:function:lambda-a",
+    "B1": "arn:aws:lambda:region:account:function:lambda-b1",
+    "B2": "arn:aws:lambda:region:account:function:lambda-b2",
+    "B3": "arn:aws:lambda:region:account:function:lambda-b3",
+    "C": "arn:aws:lambda:region:account:function:lambda-c"
+  }
+}
 ```
 
-### VS Code Debugging
+### CLI Tool (For Testing)
 
-The project includes a VS Code launch configuration:
+Use the provided test script to execute workflows programmatically:
 
-1. Open the project in VS Code
-2. Go to Run and Debug (Ctrl+Shift+D)
-3. Select "Python Debugger: Invoke All"
-4. Enter the required parameters when prompted:
-   - State Machine ARN (optional)
-   - Orchestrator ARN
-   - AWS Region
-   - Stack Name
+```bash
+# Run with the orchestrator ARN from CDK outputs
+uv run python tools/invoke_all.py \
+  --orchestrator-arn <orchestrator-arn-from-cdk-output> \
+  --region eu-central-1 \
+  --stack-name WorkflowManagementStack
+```
+
+### Development Mode
+
+#### Frontend Development
+
+For frontend development with hot reload:
+
+```bash
+cd web/workflow-dashboard
+
+# Set the API Gateway URL (from CDK outputs)
+export VITE_API_BASE_URL=https://your-api-gateway-url.amazonaws.com
+
+# Start development server
+npm run dev
+
+# The dashboard will be available at http://localhost:5173
+```
+
+#### Backend Development
+
+For backend API development:
+
+```bash
+# Deploy only the backend changes
+uv run cdk deploy WorkflowManagementStack
+
+# Monitor logs
+aws logs tail /aws/lambda/workflow-api --follow
+```
+
+### Production Deployment
+
+#### Frontend Build and Deploy
+
+```bash
+cd web/workflow-dashboard
+
+# Build for production
+npm run build
+
+# Deploy the updated stack (includes frontend build)
+cd ../..
+uv run cdk deploy WorkflowManagementStack
+```
+
+The CDK stack automatically:
+1. Builds the React application
+2. Uploads assets to S3
+3. Invalidates CloudFront cache
+4. Configures proper CORS headers
 
 ### Monitoring Workflows
 
-1. **DynamoDB Console**: View workflow state and task progress
-2. **CloudWatch Logs**: Monitor Lambda execution logs
-3. **Step Functions Console**: Track Step Functions executions (if using SFN mode)
+1. **Web Dashboard**: Real-time workflow status and visual DAG representation
+2. **DynamoDB Console**: View raw workflow state and task progress
+3. **CloudWatch Logs**: Monitor Lambda execution logs
+4. **API Gateway Console**: Track API request metrics
 
 ## Project Structure
 
 ```
 orchestra/
 ├── src/
+│   ├── api/
+│   │   └── workflows_api.py          # REST API for workflow management
 │   ├── ddb_workflow/
 │   │   ├── orchestrator_lambda.py    # Workflow coordinator
 │   │   ├── worker_lambda.py          # Task executor
@@ -171,13 +270,25 @@ orchestra/
 │   │   │   └── lambda_b2/
 │   │   └── container_b3/
 │   └── stacks/
-│       ├── orchestration_stack.py    # Main CDK stack
-│       ├── payload_stack.py          # Shared resources
-│       └── monitoring_stack.py       # Monitoring resources
+│       ├── workflow_management_stack.py  # Main CDK stack
+│       ├── orchestration_stack.py       # Lambda orchestration resources
+│       ├── payload_stack.py             # Shared resources (DynamoDB, ECR)
+│       └── monitoring_stack.py          # Monitoring resources
+├── web/
+│   └── workflow-dashboard/              # React frontend
+│       ├── src/
+│       │   ├── components/
+│       │   │   ├── WorkflowGraph.tsx    # DAG visualization
+│       │   │   └── WorkflowList.tsx     # Workflow list view
+│       │   ├── services/
+│       │   │   └── api.ts               # API client
+│       │   └── App.tsx                  # Main React app
+│       ├── package.json
+│       └── vite.config.ts
 ├── tools/
-│   └── invoke_all.py                 # Test/execution script
-├── .vscode/
-│   └── launch.json                   # VS Code debug config
+│   └── invoke_all.py                    # CLI tool for testing
+├── tests/
+│   └── unit/                           # Unit tests
 ├── pyproject.toml
 ├── uv.lock
 └── README.md
@@ -185,14 +296,23 @@ orchestra/
 
 ## How It Works
 
-### DynamoDB-Based Orchestration
+### Event-Driven Orchestration
 
-1. **Initialization**: Orchestrator seeds workflow graph in DynamoDB
-2. **Task Execution**: Worker Lambda executes tasks with version-based locking
-3. **Dependency Resolution**: DynamoDB Streams trigger fan-out when tasks complete
-4. **State Management**: Conditional updates ensure exactly-once execution
+1. **API Request**: User creates workflow via web dashboard or API
+2. **Initialization**: Orchestrator seeds workflow graph in DynamoDB
+3. **Task Execution**: Worker Lambda executes tasks with version-based locking
+4. **Dependency Resolution**: DynamoDB Streams trigger fan-out when tasks complete
+5. **State Management**: Conditional updates ensure exactly-once execution
+6. **Real-time Updates**: API provides current status for dashboard display
 
 ### Workflow States
+
+- **PENDING**: Workflow created, waiting to start
+- **RUNNING**: Workflow executing with active tasks
+- **SUCCESS**: All tasks completed successfully
+- **FAILED**: One or more tasks failed
+
+### Task States
 
 - **PENDING**: Task waiting for dependencies
 - **READY**: Task ready for execution
@@ -205,6 +325,7 @@ orchestra/
 - **Version Control**: Optimistic locking prevents race conditions
 - **Idempotency**: Tasks execute exactly once even with retries
 - **Fan-out**: Orchestrator triggers dependent tasks when dependencies complete
+- **DAG Visualization**: Frontend renders task dependencies as directed acyclic graph
 
 ## Task Implementation Examples
 
@@ -218,8 +339,10 @@ The project includes sample tasks implemented in different runtimes:
 
 ## Development Commands
 
+### Backend Development
+
 ```bash
-# Install dependencies
+# Install Python dependencies
 uv pip install -r requirements.txt
 
 # Run type checking
@@ -233,10 +356,10 @@ uv run black src/ tools/
 uv run isort src/ tools/
 
 # Deploy infrastructure
-uv run cdk deploy --all
+uv run cdk deploy WorkflowManagementStack
 
 # Destroy infrastructure
-uv run cdk destroy --all
+uv run cdk destroy WorkflowManagementStack
 
 # View CDK diff
 uv run cdk diff
@@ -245,16 +368,63 @@ uv run cdk diff
 uv run cdk synth
 ```
 
+### Frontend Development
+
+```bash
+cd web/workflow-dashboard
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+
+# Build for production
+npm run build
+
+# Run type checking
+npm run type-check
+
+# Run linting
+npm run lint
+
+# Run tests
+npm test
+```
+
+### Full Stack Development
+
+```bash
+# 1. Deploy backend infrastructure
+uv run cdk deploy WorkflowManagementStack
+
+# 2. Get API Gateway URL from outputs
+export VITE_API_BASE_URL=https://your-api-id.execute-api.region.amazonaws.com
+
+# 3. Start frontend development server
+cd web/workflow-dashboard
+npm run dev
+
+# 4. Access dashboard at http://localhost:5173
+```
+
 ## Configuration
 
 ### Environment Variables
 
 The system uses the following environment variables:
 
-- `AWS_REGION`: AWS region for deployment
+#### Backend (Lambda)
 - `TABLE_NAME`: DynamoDB table name (set by CDK)
 - `WORKER_ARN`: Worker Lambda ARN (set by CDK)
-- `LAMBDA_*_NAME`: Lambda function names (for testing)
+- `ORCHESTRATOR_ARN`: Orchestrator Lambda ARN (set by CDK)
+
+#### Frontend (React)
+- `VITE_API_BASE_URL`: API Gateway base URL for API calls
+
+#### Development
+- `AWS_REGION`: AWS region for deployment
+- `CDK_DEFAULT_REGION`: Default region for CDK
 
 ### CDK Context
 
@@ -262,7 +432,7 @@ The CDK application can be configured via `cdk.json`:
 
 ```json
 {
-  "app": "python src/app.py",
+  "app": "uv run python src/app.py",
   "context": {
     "@aws-cdk/core:enableStackNameDuplicates": true,
     "aws-cdk:enableDiffNoFail": true
@@ -274,7 +444,27 @@ The CDK application can be configured via `cdk.json`:
 
 ### Common Issues
 
-1. **Import Errors**: Ensure absolute imports in Lambda functions
+1. **CORS Errors in Frontend**: 
+   ```bash
+   # Ensure API Gateway URL is correctly set
+   export VITE_API_BASE_URL=https://your-api-id.execute-api.region.amazonaws.com
+   
+   # Check CORS configuration in API Gateway console
+   ```
+
+2. **Frontend Build Issues**:
+   ```bash
+   cd web/workflow-dashboard
+   
+   # Clear cache and reinstall
+   rm -rf node_modules package-lock.json
+   npm install
+   
+   # Check Node.js version (requires Node 16+)
+   node --version
+   ```
+
+3. **Lambda Import Errors**: Ensure absolute imports in Lambda functions
    ```python
    # Good
    from ddb_workflow.workflow_types import TaskExecutionRequest
@@ -283,62 +473,119 @@ The CDK application can be configured via `cdk.json`:
    from .workflow_types import TaskExecutionRequest
    ```
 
-2. **Permission Errors**: Verify IAM roles have necessary permissions
+4. **Permission Errors**: Verify IAM roles have necessary permissions
    - DynamoDB read/write access
    - Lambda invoke permissions
    - CloudWatch Logs access
+   - S3 read access for static hosting
 
-3. **Resource Not Found**: Check CloudFormation exports are created
+5. **API Gateway 502 Errors**: Check Lambda function logs
    ```bash
-   aws cloudformation list-exports --region eu-central-1
+   aws logs tail /aws/lambda/workflow-api --follow
    ```
 
-4. **Version Conflicts**: Ensure expected versions match in DynamoDB
-   - Check task versions in DynamoDB console
-   - Verify worker Lambda receives correct expected version
+6. **CloudFront Cache Issues**: 
+   ```bash
+   # Invalidate CloudFront cache after frontend updates
+   aws cloudfront create-invalidation --distribution-id YOUR_DISTRIBUTION_ID --paths "/*"
+   ```
 
 ### Debugging Tips
 
-1. **CloudWatch Logs**: Check logs for detailed error messages
+1. **Frontend Issues**: 
+   ```bash
+   # Check browser console for errors
+   # Inspect Network tab for API calls
+   # Verify environment variables are set
+   ```
+
+2. **Backend API Issues**:
+   ```bash
+   # Check CloudWatch Logs for API Lambda
+   aws logs tail /aws/lambda/workflow-api --follow
+   
+   # Test API endpoints directly
+   curl -X GET https://your-api-id.execute-api.region.amazonaws.com/workflows
+   ```
+
+3. **CloudWatch Logs**: Check logs for detailed error messages
    ```bash
    aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/"
    ```
 
-2. **DynamoDB Console**: Inspect workflow state and task progress
+4. **DynamoDB Console**: Inspect workflow state and task progress
 
-3. **X-Ray Tracing**: Enable for distributed tracing (optional)
-
-4. **VS Code Debugger**: Use for local testing and development
+5. **X-Ray Tracing**: Enable for distributed tracing (optional)
 
 ### Performance Tuning
 
 - **Lambda Memory**: Adjust based on task requirements
 - **DynamoDB Capacity**: Configure read/write capacity units
 - **Timeout Settings**: Set appropriate timeouts for tasks
-- **Batch Size**: Optimize DynamoDB Stream batch sizes
+- **CloudFront Caching**: Configure optimal cache settings for static assets
+- **API Gateway Caching**: Enable caching for frequently accessed endpoints
 
 ## Testing
 
 ### Unit Tests
 
 ```bash
-# Run unit tests
+# Run Python unit tests
 uv run pytest tests/unit/
 
 # Run with coverage
 uv run pytest --cov=src tests/
+
+# Run specific test file
+uv run pytest tests/unit/test_orchestrator_lambda.py -v
+```
+
+### Frontend Tests
+
+```bash
+cd web/workflow-dashboard
+
+# Run React component tests
+npm test
+
+# Run tests in watch mode
+npm test -- --watch
+
+# Run tests with coverage
+npm test -- --coverage
 ```
 
 ### Integration Tests
 
 ```bash
 # Deploy test stack
-uv run cdk deploy --all
+uv run cdk deploy WorkflowManagementStack
 
-# Run integration tests
-uv run python tools/invoke_all.py --orchestrator-arn <arn>
+# Test via web dashboard
+# Open the CloudFront URL and create a test workflow
+
+# Test via API
+curl -X POST https://your-api-id.execute-api.region.amazonaws.com/workflows \
+  -H "Content-Type: application/json" \
+  -d '{"workflowId": "test-workflow-123"}'
 
 # Check DynamoDB for workflow completion
+aws dynamodb scan --table-name YourTableName --region your-region
+```
+
+### End-to-End Testing
+
+```bash
+# 1. Deploy the stack
+uv run cdk deploy WorkflowManagementStack
+
+# 2. Get the CloudFront URL from outputs
+# 3. Open the dashboard in browser
+# 4. Create a workflow and verify:
+#    - Workflow appears in list
+#    - Tasks execute in correct order
+#    - Status updates in real-time
+#    - DAG visualization shows progress
 ```
 
 ## Monitoring and Observability
@@ -349,26 +596,35 @@ The system exports custom metrics:
 - Workflow execution duration
 - Task success/failure rates
 - Concurrent executions
+- API Gateway request metrics
+- CloudFront cache hit rates
 
 ### Alarms
 
 Set up CloudWatch alarms for:
-- Lambda errors
+- Lambda errors and timeouts
 - DynamoDB throttling
+- API Gateway 4xx/5xx errors
 - Workflow failures
 
 ### Dashboards
 
 Create CloudWatch dashboards to monitor:
-- Workflow throughput
+- Workflow throughput and completion rates
 - Task execution times
-- System health
+- API performance metrics
+- System health and error rates
+- Frontend performance (CloudFront metrics)
 
 ## Security Considerations
 
 - **IAM Roles**: Follow principle of least privilege
+- **CORS Configuration**: Properly configured for frontend domain
+- **API Gateway**: Enable request validation and throttling
+- **CloudFront**: Enable security headers and HTTPS redirect
+- **S3 Bucket**: Block public access except for static website hosting
 - **VPC**: Deploy Lambdas in VPC if required
-- **Encryption**: Enable encryption at rest for DynamoDB
+- **Encryption**: Enable encryption at rest for DynamoDB and S3
 - **Secrets**: Use AWS Secrets Manager for sensitive data
 
 ## Cost Optimization
@@ -376,20 +632,25 @@ Create CloudWatch dashboards to monitor:
 - **Reserved Capacity**: Use for predictable DynamoDB workloads
 - **Lambda Provisioned Concurrency**: For consistent performance
 - **CloudWatch Log Retention**: Set appropriate retention periods
-- **Resource Cleanup**: Destroy unused stacks
+- **CloudFront**: Use appropriate price class for geographic distribution
+- **S3 Storage Classes**: Use appropriate storage class for static assets
+- **API Gateway Caching**: Enable caching to reduce Lambda invocations
+- **Resource Cleanup**: Destroy unused stacks and clear old CloudWatch logs
 
 ## Cleanup
 
 To avoid AWS charges, destroy the infrastructure when done:
 
 ```bash
-uv run cdk destroy --all
+uv run cdk destroy WorkflowManagementStack
 ```
 
 Verify all resources are deleted:
 ```bash
 aws cloudformation list-stacks --stack-status-filter DELETE_COMPLETE
 ```
+
+Note: S3 buckets with content may need manual cleanup before stack deletion.
 
 ## Contributing
 
@@ -403,19 +664,15 @@ aws cloudformation list-stacks --stack-status-filter DELETE_COMPLETE
 
 ### Development Guidelines
 
-- Follow PEP 8 style guidelines
-- Add type hints for all functions
+- Follow PEP 8 style guidelines for Python code
+- Use TypeScript for frontend development
+- Add type hints for all Python functions
 - Include docstrings for public methods
 - Write tests for new functionality
 - Update documentation as needed
+- Follow React best practices for component development
+- Use proper error handling and user feedback in the UI
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- AWS CDK team for the excellent infrastructure-as-code framework
-- AWS Lambda team for serverless compute capabilities
-- DynamoDB team for the scalable NoSQL database
-- UV team for the fast Python package manager
