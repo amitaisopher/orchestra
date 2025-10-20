@@ -35,9 +35,10 @@ orchestration = OrchestrationStack(
     workflow_state_table=payload.workflow_state_table,
     ecr_repo=payload.b3_ecr_repo,
 )
+orchestration.add_dependency(payload)
 
 
-MonitoringStack(
+monitoring = MonitoringStack(
     app,
     "MonitoringStack",
     env=env,
@@ -45,6 +46,8 @@ MonitoringStack(
     state_machine=orchestration.state_machine,
     table=payload.workflow_state_table,
 )
+monitoring.add_dependency(orchestration)
+monitoring.add_dependency(payload)
 
 
 # Stack 1: API (must be deployed first)
