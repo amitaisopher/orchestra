@@ -5,10 +5,11 @@ import os
 from aws_cdk import App, Environment
 from dotenv import load_dotenv
 
+from src.stacks.api_stack import ApiStack
+from src.stacks.frontend_stack import FrontendStack
 from src.stacks.monitoring_stack import MonitoringStack
 from src.stacks.orchestration_stack import OrchestrationStack
 from src.stacks.payload_stack import PayloadStack
-from src.stacks.workflow_management_stack import WorkflowManagementStack
 
 load_dotenv(".env")
 
@@ -46,13 +47,25 @@ MonitoringStack(
 )
 
 
-WorkflowManagementStack(
+# Stack 1: API (must be deployed first)
+api_stack = ApiStack(
     app,
-    "WorkflowManagementStack",
+    "ApiStack",
     env=env,
     workflow_state_table=payload.workflow_state_table,
     orchestrator_fn=orchestration.orchestrator,
 )
+
+# Stack 2: Frontend (depends on API stack)
+frontend_stack = FrontendStack(
+    app,
+    "FrontendStack",
+    env=env,
+    api_url=api_stack.api_url,
+)
+
+# Ensure frontend stack depends on API stack
+frontend_stack.add_dependency(api_stack)
 
 
 app.synth()

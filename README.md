@@ -13,27 +13,44 @@ Orchestra implements a workflow pattern: `A → (B1, B2, B3) → C` where:
 The system includes:
 1. **Backend**: Event-driven orchestration using DynamoDB Streams
 2. **Frontend**: React-based workflow dashboard with real-time updates
-3. **Infrastructure**: Single CDK stack deployment with API Gateway and S3 hosting
+3. **Infrastructure**: Multi-stack CDK deployment with API Gateway and S3 hosting
 
 ## Architecture
 
 ### Components
 
-- **Workflow Dashboard**: React SPA hosted on S3 with CloudFront CDN
+- **Workflow Dashboard**: React SPA hosted on S3 with automatic API configuration
 - **API Gateway**: RESTful API for workflow management
 - **Orchestrator Lambda**: Manages workflow state and dependency resolution
 - **Worker Lambda**: Executes individual tasks with idempotency guarantees
 - **Task Lambdas (A, B1, B2, B3, C)**: Business logic functions
 - **DynamoDB Table**: Stores workflow state and task dependencies
 
+### Deployment Stacks
+
+The system uses a **two-stack deployment approach** to solve the "chicken and egg" problem where the frontend needs the API URL to build, but the API URL isn't known until deployment:
+
+1. **ApiStack**: Deploys the backend API infrastructure first
+   - API Gateway with Lambda proxy integration
+   - Workflows API Lambda function
+   - IAM roles and permissions
+   - Exports the API Gateway URL for the frontend stack
+
+2. **FrontendStack**: Deploys the frontend with automatic API configuration
+   - Builds the React application with a placeholder API URL
+   - Deploys static assets to S3 with website hosting
+   - Injects the real API URL via runtime configuration (config.js)
+   - Depends on ApiStack to ensure proper deployment order
+
 ### Key Features
 
+- **Automated Deployment**: No manual .env file editing required
+- **Runtime Configuration**: Frontend automatically discovers API URL at runtime
 - **Web Dashboard**: Visual workflow management with DAG visualization
 - **Real-time Status**: Live workflow status updates
 - **Idempotency**: Version-based optimistic locking prevents duplicate executions
 - **Concurrency Control**: Multiple workers can safely process tasks simultaneously
 - **Event-Driven**: Uses DynamoDB Streams for reactive coordination
-- **Production Ready**: CDN distribution with proper CORS handling
 
 ## Prerequisites
 
@@ -125,35 +142,51 @@ uv run cdk bootstrap
 
 ### 4. Deploy Infrastructure
 
-```bash
-# Deploy the complete stack
-uv run cdk deploy WorkflowManagementStack
+The deployment uses a two-stack approach for optimal automation:
 
-# The stack will output the API Gateway URL and CloudFront distribution URL
+```bash
+# Deploy the API stack first (backend infrastructure)
+uv run cdk deploy ApiStack
+
+# Deploy the frontend stack second (automatically configured with API URL)
+uv run cdk deploy FrontendStack
+
+# Or deploy both stacks at once (CDK handles dependencies)
+uv run cdk deploy --all
 ```
 
-### 5. Configure Environment Variables
+The deployment process:
+1. **ApiStack** deploys the backend API and exports the API Gateway URL
+2. **FrontendStack** automatically builds the React app and injects the correct API URL
+3. No manual configuration or .env file editing required
 
-The deployment will automatically configure the necessary environment variables. The CDK stack outputs will include:
-- API Gateway URL
-- CloudFront distribution URL
-- DynamoDB table name
-- Lambda function ARNs
+### 5. Access the Application
+
+After deployment, the CDK outputs will show:
+- **API Gateway URL**: For direct API access
+- **Frontend Dashboard URL**: For the web interface (S3 website hosting)
+
+Example output:
+```
+Outputs:
+ApiStack.WorkflowsApiEndpoint = https://abc123.execute-api.eu-central-1.amazonaws.com/prod/
+FrontendStack.DashboardUrl = http://frontendstack-bucket.s3-website.eu-central-1.amazonaws.com
+```
 
 ## Usage
 
 ### Web Dashboard (Recommended)
 
-After deployment, access the workflow dashboard via the CloudFront URL:
+After deployment, access the workflow dashboard via the S3 website URL from the CDK outputs:
 
-1. **Production**: Use the CloudFront distribution URL from the CDK outputs
-2. **Development**: Run the local development server (see Development section)
+1. **Frontend URL**: Use the FrontendStack DashboardUrl from CDK outputs
+2. **Automatic Configuration**: The frontend automatically loads the correct API URL at runtime
 
 The dashboard provides:
 - **Workflow List**: View all workflows and their current status
 - **Workflow Details**: Visual DAG representation of task dependencies
 - **Real-time Updates**: Live status updates as workflows execute
-- **Workflow Creation**: Start new workflows with custom parameters
+- **Workflow Creation**: Start new workflows with auto-generated IDs
 
 ### API Endpoints
 
@@ -166,18 +199,15 @@ GET /workflows
 # Get specific workflow details
 GET /workflows/{workflowId}
 
-# Create a new workflow
+```bash
+# Create a new workflow (API will auto-generate workflow ID and start execution)
 POST /workflows
 {
-  "workflowId": "my-workflow-123",
-  "lambdas": {
-    "A": "arn:aws:lambda:region:account:function:lambda-a",
-    "B1": "arn:aws:lambda:region:account:function:lambda-b1",
-    "B2": "arn:aws:lambda:region:account:function:lambda-b2",
-    "B3": "arn:aws:lambda:region:account:function:lambda-b3",
-    "C": "arn:aws:lambda:region:account:function:lambda-c"
-  }
+  "workflowId": "my-workflow-123"
 }
+```
+
+**Note**: The `lambdas` parameter is no longer required as the orchestrator now has access to the Lambda ARNs via environment variables.
 ```
 
 ### CLI Tool (For Testing)
@@ -189,7 +219,7 @@ Use the provided test script to execute workflows programmatically:
 uv run python tools/invoke_all.py \
   --orchestrator-arn <orchestrator-arn-from-cdk-output> \
   --region eu-central-1 \
-  --stack-name WorkflowManagementStack
+  --stack-name OrchestrationStack
 ```
 
 ### Development Mode
@@ -201,8 +231,8 @@ For frontend development with hot reload:
 ```bash
 cd web/workflow-dashboard
 
-# Set the API Gateway URL (from CDK outputs)
-export VITE_API_BASE_URL=https://your-api-gateway-url.amazonaws.com
+# The API URL is automatically loaded at runtime via config.js
+# No environment variable configuration needed
 
 # Start development server
 npm run dev
@@ -215,8 +245,11 @@ npm run dev
 For backend API development:
 
 ```bash
-# Deploy only the backend changes
-uv run cdk deploy WorkflowManagementStack
+# Deploy only the API stack changes
+uv run cdk deploy ApiStack
+
+# Deploy only the orchestration changes
+uv run cdk deploy OrchestrationStack
 
 # Monitor logs
 aws logs tail /aws/lambda/workflow-api --follow
@@ -224,24 +257,22 @@ aws logs tail /aws/lambda/workflow-api --follow
 
 ### Production Deployment
 
-#### Frontend Build and Deploy
+#### Building and Deploying
 
 ```bash
-cd web/workflow-dashboard
+# The build process is fully automated
+# Just deploy the stacks and everything is handled automatically
 
-# Build for production
-npm run build
+cd /path/to/orchestra
 
-# Deploy the updated stack (includes frontend build)
-cd ../..
-uv run cdk deploy WorkflowManagementStack
+# Deploy both stacks (or individually as needed)
+uv run cdk deploy --all
 ```
 
-The CDK stack automatically:
-1. Builds the React application
-2. Uploads assets to S3
-3. Invalidates CloudFront cache
-4. Configures proper CORS headers
+The deployment process automatically:
+1. **ApiStack**: Deploys backend infrastructure and exports API URL
+2. **FrontendStack**: Builds React app, uploads to S3, and injects runtime configuration
+3. **No manual steps**: Everything is automated including API URL configuration
 
 ### Monitoring Workflows
 
@@ -270,31 +301,50 @@ orchestra/
 │   │   │   └── lambda_b2/
 │   │   └── container_b3/
 │   └── stacks/
-│       ├── workflow_management_stack.py  # Main CDK stack
-│       ├── orchestration_stack.py       # Lambda orchestration resources
-│       ├── payload_stack.py             # Shared resources (DynamoDB, ECR)
-│       └── monitoring_stack.py          # Monitoring resources
+│       ├── api_stack.py              # API infrastructure (API Gateway, Lambda)
+│       ├── frontend_stack.py         # Frontend deployment (S3, build automation)
+│       ├── orchestration_stack.py    # Lambda orchestration resources
+│       ├── payload_stack.py          # Shared resources (DynamoDB, ECR)
+│       └── monitoring_stack.py       # Monitoring resources
 ├── web/
-│   └── workflow-dashboard/              # React frontend
+│   └── workflow-dashboard/           # React frontend
 │       ├── src/
 │       │   ├── components/
-│       │   │   ├── WorkflowGraph.tsx    # DAG visualization
-│       │   │   └── WorkflowList.tsx     # Workflow list view
+│       │   │   ├── WorkflowGraph.tsx # DAG visualization
+│       │   │   └── WorkflowList.tsx  # Workflow list view
 │       │   ├── services/
-│       │   │   └── api.ts               # API client
-│       │   └── App.tsx                  # Main React app
+│       │   │   └── api.ts            # API client
+│       │   └── App.tsx               # Main React app
+│       ├── public/
+│       │   └── config.js             # Runtime configuration template
 │       ├── package.json
 │       └── vite.config.ts
 ├── tools/
-│   └── invoke_all.py                    # CLI tool for testing
+│   └── invoke_all.py                 # CLI tool for testing
 ├── tests/
-│   └── unit/                           # Unit tests
+│   └── unit/                         # Unit tests
 ├── pyproject.toml
 ├── uv.lock
 └── README.md
 ```
 
 ## How It Works
+
+### Two-Stack Deployment Architecture
+
+The system solves the "chicken and egg" problem where the frontend needs the API URL to build, but the API URL isn't available until after deployment:
+
+1. **ApiStack Deployment**: 
+   - Deploys API Gateway and Lambda functions
+   - Exports the API Gateway URL for other stacks to reference
+   - Sets up CORS configuration for frontend access
+
+2. **FrontendStack Deployment**:
+   - Depends on ApiStack (automatic dependency resolution by CDK)
+   - Builds React application with placeholder API URL
+   - Deploys static assets to S3 with website hosting
+   - Injects real API URL via runtime configuration file (config.js)
+   - Frontend loads API URL at runtime, not build time
 
 ### Event-Driven Orchestration
 
@@ -355,11 +405,17 @@ uv run pytest
 uv run black src/ tools/
 uv run isort src/ tools/
 
-# Deploy infrastructure
-uv run cdk deploy WorkflowManagementStack
+# Deploy API infrastructure
+uv run cdk deploy ApiStack
+
+# Deploy frontend infrastructure
+uv run cdk deploy FrontendStack
+
+# Deploy all stacks
+uv run cdk deploy --all
 
 # Destroy infrastructure
-uv run cdk destroy WorkflowManagementStack
+uv run cdk destroy --all
 
 # View CDK diff
 uv run cdk diff
@@ -395,17 +451,21 @@ npm test
 ### Full Stack Development
 
 ```bash
-# 1. Deploy backend infrastructure
-uv run cdk deploy WorkflowManagementStack
+# 1. Deploy backend infrastructure first
+uv run cdk deploy ApiStack
 
-# 2. Get API Gateway URL from outputs
-export VITE_API_BASE_URL=https://your-api-id.execute-api.region.amazonaws.com
+# 2. Deploy frontend (automatically gets API URL from ApiStack)
+uv run cdk deploy FrontendStack
 
-# 3. Start frontend development server
+# 3. Get frontend URL from CDK outputs and access dashboard
+# No environment variable configuration needed - everything is automatic
+
+# 4. For local development with hot reload:
 cd web/workflow-dashboard
 npm run dev
 
-# 4. Access dashboard at http://localhost:5173
+# 5. Access local dashboard at http://localhost:5173
+# Local dashboard will use the deployed API from step 1
 ```
 
 ## Configuration
@@ -420,7 +480,8 @@ The system uses the following environment variables:
 - `ORCHESTRATOR_ARN`: Orchestrator Lambda ARN (set by CDK)
 
 #### Frontend (React)
-- `VITE_API_BASE_URL`: API Gateway base URL for API calls
+- **Runtime Configuration**: API URL loaded from `/config.js` at runtime
+- `VITE_API_BASE`: Fallback API URL for development (optional)
 
 #### Development
 - `AWS_REGION`: AWS region for deployment
@@ -444,12 +505,18 @@ The CDK application can be configured via `cdk.json`:
 
 ### Common Issues
 
-1. **CORS Errors in Frontend**: 
+1. **Frontend Not Loading API Configuration**: 
    ```bash
-   # Ensure API Gateway URL is correctly set
-   export VITE_API_BASE_URL=https://your-api-id.execute-api.region.amazonaws.com
+   # Check that config.js is properly deployed
+   curl http://your-frontend-url.s3-website.region.amazonaws.com/config.js
    
-   # Check CORS configuration in API Gateway console
+   # Should return: window.API_BASE = 'https://your-api-url.amazonaws.com/prod';
+   ```
+
+2. **CORS Errors in Frontend**: 
+   ```bash
+   # Verify API Gateway CORS configuration in AWS console
+   # Check that frontend domain is allowed in CORS settings
    ```
 
 2. **Frontend Build Issues**:
@@ -462,9 +529,22 @@ The CDK application can be configured via `cdk.json`:
    
    # Check Node.js version (requires Node 16+)
    node --version
+   
+   # Manual build test
+   npm run build
    ```
 
-3. **Lambda Import Errors**: Ensure absolute imports in Lambda functions
+3. **Stack Deployment Order Issues**:
+   ```bash
+   # If FrontendStack fails due to missing API URL:
+   uv run cdk deploy ApiStack
+   uv run cdk deploy FrontendStack
+   
+   # Or use --all flag for automatic dependency resolution
+   uv run cdk deploy --all
+   ```
+
+4. **Lambda Import Errors**: Ensure absolute imports in Lambda functions
    ```python
    # Good
    from ddb_workflow.workflow_types import TaskExecutionRequest
@@ -473,21 +553,23 @@ The CDK application can be configured via `cdk.json`:
    from .workflow_types import TaskExecutionRequest
    ```
 
-4. **Permission Errors**: Verify IAM roles have necessary permissions
+5. **Permission Errors**: Verify IAM roles have necessary permissions
    - DynamoDB read/write access
    - Lambda invoke permissions
    - CloudWatch Logs access
    - S3 read access for static hosting
 
-5. **API Gateway 502 Errors**: Check Lambda function logs
+6. **API Gateway 502 Errors**: Check Lambda function logs
    ```bash
    aws logs tail /aws/lambda/workflow-api --follow
    ```
 
-6. **CloudFront Cache Issues**: 
+7. **S3 Website Access Issues**: 
    ```bash
-   # Invalidate CloudFront cache after frontend updates
-   aws cloudfront create-invalidation --distribution-id YOUR_DISTRIBUTION_ID --paths "/*"
+   # Check S3 bucket website configuration
+   aws s3api get-bucket-website --bucket your-frontend-bucket-name
+   
+   # Verify bucket policy allows public read access for website hosting
    ```
 
 ### Debugging Tips
@@ -496,7 +578,7 @@ The CDK application can be configured via `cdk.json`:
    ```bash
    # Check browser console for errors
    # Inspect Network tab for API calls
-   # Verify environment variables are set
+   # Verify config.js loads correctly: /config.js endpoint
    ```
 
 2. **Backend API Issues**:
@@ -558,14 +640,14 @@ npm test -- --coverage
 ### Integration Tests
 
 ```bash
-# Deploy test stack
-uv run cdk deploy WorkflowManagementStack
+# Deploy test stacks
+uv run cdk deploy --all
 
 # Test via web dashboard
-# Open the CloudFront URL and create a test workflow
+# Open the S3 website URL and create a test workflow
 
-# Test via API
-curl -X POST https://your-api-id.execute-api.region.amazonaws.com/workflows \
+# Test via API (get URL from ApiStack outputs)
+curl -X POST https://your-api-id.execute-api.region.amazonaws.com/prod/workflows \
   -H "Content-Type: application/json" \
   -d '{"workflowId": "test-workflow-123"}'
 
@@ -576,10 +658,10 @@ aws dynamodb scan --table-name YourTableName --region your-region
 ### End-to-End Testing
 
 ```bash
-# 1. Deploy the stack
-uv run cdk deploy WorkflowManagementStack
+# 1. Deploy both stacks
+uv run cdk deploy --all
 
-# 2. Get the CloudFront URL from outputs
+# 2. Get the frontend URL from FrontendStack outputs
 # 3. Open the dashboard in browser
 # 4. Create a workflow and verify:
 #    - Workflow appears in list
@@ -621,9 +703,9 @@ Create CloudWatch dashboards to monitor:
 - **IAM Roles**: Follow principle of least privilege
 - **CORS Configuration**: Properly configured for frontend domain
 - **API Gateway**: Enable request validation and throttling
-- **CloudFront**: Enable security headers and HTTPS redirect
-- **S3 Bucket**: Block public access except for static website hosting
-- **VPC**: Deploy Lambdas in VPC if required
+- **S3 Website Hosting**: Configured for public read access with website hosting
+- **Static Assets**: Secure deployment of frontend assets
+- **Runtime Configuration**: Secure injection of API URLs without exposing secrets
 - **Encryption**: Enable encryption at rest for DynamoDB and S3
 - **Secrets**: Use AWS Secrets Manager for sensitive data
 
@@ -632,7 +714,6 @@ Create CloudWatch dashboards to monitor:
 - **Reserved Capacity**: Use for predictable DynamoDB workloads
 - **Lambda Provisioned Concurrency**: For consistent performance
 - **CloudWatch Log Retention**: Set appropriate retention periods
-- **CloudFront**: Use appropriate price class for geographic distribution
 - **S3 Storage Classes**: Use appropriate storage class for static assets
 - **API Gateway Caching**: Enable caching to reduce Lambda invocations
 - **Resource Cleanup**: Destroy unused stacks and clear old CloudWatch logs
@@ -642,7 +723,7 @@ Create CloudWatch dashboards to monitor:
 To avoid AWS charges, destroy the infrastructure when done:
 
 ```bash
-uv run cdk destroy WorkflowManagementStack
+uv run cdk destroy --all
 ```
 
 Verify all resources are deleted:

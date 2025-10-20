@@ -2,19 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aws_cdk import Duration, RemovalPolicy, Stack
+from aws_cdk import Duration, Stack
 from aws_cdk import aws_apigateway as apigw
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as _lambda
 from aws_cdk import aws_logs as logs
-from aws_cdk import aws_s3 as s3
-from aws_cdk import aws_s3_deployment as s3deploy
 from constructs import Construct
 
 
-class WorkflowManagementStack(Stack):
-    """REST API (API Gateway + Lambda proxy) and static dashboard (S3 site)."""
+class ApiStack(Stack):
+    """REST API (API Gateway + Lambda proxy) for workflow management."""
 
     def __init__(
         self,
@@ -32,7 +30,7 @@ class WorkflowManagementStack(Stack):
 
         logs_policy = iam.ManagedPolicy(
             self,
-            "MgmtApiBasicLogs",
+            "ApiBasicLogs",
             statements=[
                 iam.PolicyStatement(
                     actions=["logs:CreateLogGroup",
@@ -73,7 +71,7 @@ class WorkflowManagementStack(Stack):
         orchestrator_fn.grant_invoke(workflows_api)
 
         # API Gateway (proxy integration with automatic CORS)
-        api = apigw.LambdaRestApi(
+        self.api = apigw.LambdaRestApi(
             self,
             "WorkflowsApi",
             handler=workflows_api,
@@ -89,34 +87,5 @@ class WorkflowManagementStack(Stack):
             ),
         )
 
-        # Static website bucket (deploy Vite build from web/workflow-dashboard/dist)
-        site_bucket = s3.Bucket(
-            self,
-            "WorkflowDashboardBucket",
-            website_index_document="index.html",
-            public_read_access=True,  # demo only; prefer CloudFront in prod
-            block_public_access=s3.BlockPublicAccess(
-                block_public_acls=False,
-                ignore_public_acls=False,
-                block_public_policy=False,
-                restrict_public_buckets=False,
-            ),
-            auto_delete_objects=True,
-            removal_policy=RemovalPolicy.DESTROY,
-        )
-
-        s3deploy.BucketDeployment(
-            self,
-            "WorkflowDashboardDeploy",
-            sources=[s3deploy.Source.asset("web/workflow-dashboard/dist")],
-            destination_bucket=site_bucket,
-        )
-
-        # Outputs for easy access
-        from aws_cdk import CfnOutput
-        CfnOutput(
-            self,
-            "DashboardUrl",
-            value=site_bucket.bucket_website_url,
-            description="Workflow Dashboard URL",
-        )
+        # Store API URL for other stacks to use
+        self.api_url = self.api.url

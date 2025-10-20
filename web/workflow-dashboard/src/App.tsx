@@ -3,13 +3,23 @@ import WorkflowGraph from './components/WorkflowGraph'
 import WorkflowList from './components/WorkflowList'
 import './App.css'
 
-const API_BASE = import.meta.env.VITE_API_BASE as string | undefined
+// Runtime configuration - loaded from config.js file deployed by CDK
+declare global {
+  interface Window {
+    API_BASE?: string;
+  }
+}
+
+const API_BASE = window.API_BASE || import.meta.env.VITE_API_BASE as string | undefined
 
 export default function App() {
   const [apiBase, setApiBase] = useState(''); const [selectedId, setSelectedId] = useState<string|null>(null)
   const [workflow, setWorkflow] = useState<any|null>(null)
   
-  useEffect(() => { setApiBase(API_BASE ?? '') }, [])
+  useEffect(() => { 
+    // Check for runtime config first, fallback to build-time env
+    setApiBase(window.API_BASE || API_BASE || '') 
+  }, [])
   useEffect(() => {
     if (!apiBase || !selectedId) return
     const load = async () => {
