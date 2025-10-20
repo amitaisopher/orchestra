@@ -19,8 +19,127 @@ def _get_worker_arn() -> str:
     return os.environ.get("WORKER_ARN", "test-worker-arn")
 
 
+def _get_websocket_api_url() -> str:
+    return os.environ.get("WEBSOCKET_API_URL", "")
+
+
+def _broadcast_workflow_update(workflow_id: str, workflow_data: dict) -> None:
+    """Broadcast workflow status update to all connected WebSocket clients."""
+    try:
+        websocket_api_url = _get_websocket_api_url()
+        if not websocket_api_url:
+            print("WebSocket API URL not configured, skipping broadcast")
+            return
+
+        # Create API Gateway Management API client
+        # Extract the API ID and stage from the WebSocket URL
+        # URL format: wss://api-id.execute-api.region.amazonaws.com/stage
+        url_parts = websocket_api_url.replace("wss://", "").split("/")
+        api_id = url_parts[0].split(".")[0]
+        stage = url_parts[1] if len(url_parts) > 1 else "prod"
+        region = os.environ.get("AWS_REGION", "us-east-1")
+
+        apigatewaymanagementapi = boto3.client(
+            "apigatewaymanagementapi",
+            endpoint_url=f"https://{api_id}.execute-api.{region}.amazonaws.com/{stage}",
+        )
+
+        # Get all active connections from DynamoDB
+        dynamodb = boto3.resource("dynamodb")
+        connections_table_name = os.environ.get(
+            "CONNECTIONS_TABLE_NAME", "WebSocketConnections",
+        )
+        connections_table = dynamodb.Table(connections_table_name)
+
+        try:
+            response = connections_table.scan()
+            connections = response.get("Items", [])
+
+            message = {
+                "type": "workflow_update",
+                "workflow_id": workflow_id,
+                "data": workflow_data,
+            }
+
+            # Send message to all connected clients
+            for connection in connections:
+                connection_id = connection["connectionId"]
+                try:
+                    apigatewaymanagementapi.post_to_connection(
+                        ConnectionId=connection_id,
+                        Data=json.dumps(message),
+                    )
+                    print(f"Sent update to connection {connection_id}")
+                except apigatewaymanagementapi.exceptions.GoneException:
+                    # Connection is stale, remove it
+                    print(
+                        f"Removing stale connection {connection_id} (GoneException)")
+                    connections_table.delete_item(
+                        Key={"connectionId": connection_id},
+                    )
+                except Exception as e:
+                    # Handle ForbiddenException (stale connection) and other errors
+                    if "ForbiddenException" in str(e) or "Forbidden" in str(e):
+                        print(
+                            f"Removing stale connection {connection_id} (ForbiddenException)")
+                        connections_table.delete_item(
+                            Key={"connectionId": connection_id},
+                        )
+                    else:
+                        print(
+                            f"Error sending to connection {connection_id}: {e}")
+
+        except Exception as e:
+            print(f"Error querying connections: {e}")
+
+    except Exception as e:
+        print(f"Error broadcasting workflow update: {e}")
+
+
 ddb: BaseClient = boto3.client("dynamodb")
 ddb_res = boto3.resource("dynamodb")
+
+
+def _get_workflow_state(workflow_id: str):
+    """Get the current workflow state for broadcasting."""
+    try:
+        # Query all items for this workflow
+        response = ddb.query(
+            TableName=_get_table_name(),
+            KeyConditionExpression="pk = :pk",
+            ExpressionAttributeValues={
+                ":pk": {"S": _pk(workflow_id)},
+            },
+        )
+
+        items = response.get("Items", [])
+        workflow_data = {
+            "workflowId": workflow_id,
+            "tasks": {},
+            "status": "PENDING",
+            "meta": {},
+        }
+
+        for item in items:
+            if item.get("type", {}).get("S") == "META":
+                workflow_data["status"] = item.get(
+                    "status", {}).get("S", "PENDING")
+            elif item.get("type", {}).get("S") == "TASK":
+                task_id = item.get("taskId", {}).get("S", "")
+                workflow_data["tasks"][task_id] = {
+                    "taskId": task_id,
+                    "status": item.get("status", {}).get("S", "PENDING"),
+                    "dependsOn": item.get("dependsOn", {}).get("S", ""),
+                    "dependents": item.get("dependents", {}).get("S", ""),
+                    "remainingDeps": int(item.get("remainingDeps", {}).get("N", "0")),
+                    "result": item.get("result", {}).get("S", ""),
+                    "durationMs": int(item.get("durationMs", {}).get("N", "0")),
+                }
+
+        return workflow_data
+    except Exception as e:
+        print(f"Error getting workflow state for {workflow_id}: {e}")
+        return {"workflowId": workflow_id, "tasks": {}, "status": "ERROR", "meta": {}}
 
 
 def _get_table():
@@ -108,6 +227,22 @@ def _update_workflow_status(workflow_id: str) -> None:
                 # Only update if record exists
                 ConditionExpression="attribute_exists(pk)",
             )
+
+            # Broadcast workflow status update via WebSocket
+            workflow_data = {
+                "workflow_id": workflow_id,
+                "status": new_status,
+                "tasks": [
+                    {
+                        "taskId": task.get("taskId", ""),
+                        "status": task.get("status", ""),
+                        "type": task.get("type", ""),
+                    }
+                    for task in tasks
+                ],
+            }
+            _broadcast_workflow_update(workflow_id, workflow_data)
+
         except ClientError as e:
             if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
                 print(f"Error updating workflow status for {workflow_id}: {e}")
@@ -200,9 +335,12 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     }
 
     """
+    print(f"Orchestrator handler called with event: {event}")
+
     # Direct start?
     if isinstance(event, dict) and event.get("mode") == "start":
         workflow_id = str(event["workflowId"])  # required
+        print(f"Direct start mode for workflow: {workflow_id}")
         # Lambdas ARNs must be provided by environment (passed via Worker env)
         lambdas = {
             "A": os.environ.get("LAMBDA_A_ARN", ""),
@@ -212,13 +350,18 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             "C": os.environ.get("LAMBDA_C_ARN", ""),
         }
         if not all(lambdas.values()):
-            # In this minimal sample we rely on the test script to build the request with target ARNs
+            # In this minimal sample we rely on the test script to build the request
+            # with target ARNs
             lambdas = event.get("lambdas", {})
+        print(f"Starting workflow {workflow_id} with lambdas: {lambdas}")
         _start_from_template(workflow_id, lambdas)  # seed + trigger A
+        print(f"Successfully started workflow {workflow_id}")
         return {"ok": True, "workflowId": workflow_id}
 
     # Otherwise: DDB Streams fan-out
     # We expect records where a TASK transitioned to SUCCEEDED – decrement dependents' counters.
+    print(
+        f"Processing DynamoDB stream event with {len(event.get('Records', []))} records")
     for rec in event.get("Records", []):
         if rec.get("eventName") not in ("MODIFY", "INSERT"):
             continue
@@ -236,13 +379,40 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             if typ == "TASK" and status_new in ["SUCCEEDED", "FAILED"] and status_old != status_new:
                 pk = new_img["pk"]["S"]
                 workflow_id = pk.split("#", 1)[1]
+                print(
+                    f"Task status changed for workflow {workflow_id}: {status_old} -> {status_new}")
                 _update_workflow_status(workflow_id)
+                # Broadcast WebSocket update for task status changes
+                try:
+                    print(
+                        f"Attempting to broadcast WebSocket update for workflow {workflow_id}")
+                    # Get current workflow data to broadcast
+                    workflow_data = _get_workflow_state(workflow_id)
+                    print(f"Got workflow data: {workflow_data}")
+                    _broadcast_workflow_update(workflow_id, workflow_data)
+                    print(
+                        f"Successfully broadcasted WebSocket update for workflow {workflow_id}")
+                except Exception as e:
+                    print(
+                        f"Error broadcasting workflow update for {workflow_id}: {e}")
             continue
         pk = new_img["pk"]["S"]
         workflow_id = pk.split("#", 1)[1]
 
         # Update overall workflow status whenever a task completes
         _update_workflow_status(workflow_id)
+
+        # Broadcast WebSocket update for task completion
+        try:
+            print(
+                f"Attempting to broadcast WebSocket update for task completion in workflow {workflow_id}")
+            workflow_data = _get_workflow_state(workflow_id)
+            print(f"Got workflow data for task completion: {workflow_data}")
+            _broadcast_workflow_update(workflow_id, workflow_data)
+            print(
+                f"Successfully broadcasted WebSocket update for task completion in workflow {workflow_id}")
+        except Exception as e:
+            print(f"Error broadcasting workflow update for {workflow_id}: {e}")
 
         dependents_csv = new_img.get("dependents", {}).get("S", "")
         if not dependents_csv:
@@ -283,6 +453,15 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
                         # Update workflow status when task becomes ready
                         _update_workflow_status(workflow_id)
+
+                        # Broadcast WebSocket update when task becomes ready
+                        try:
+                            workflow_data = _get_workflow_state(workflow_id)
+                            _broadcast_workflow_update(
+                                workflow_id, workflow_data)
+                        except Exception as e:
+                            print(
+                                f"Error broadcasting workflow update for {workflow_id}: {e}")
 
                         new_vals_ready = resp.get("Attributes", {})
                         dep_target = new_vals_ready.get(

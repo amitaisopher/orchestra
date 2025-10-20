@@ -46,7 +46,7 @@ class ApiStack(Stack):
         )
 
         # API Lambda
-        api_log_group = logs.LogGroup(self, "WorkflowsApiLogGroup",
+        api_log_group = logs.LogGroup(self, "WorqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkflowsApiLogGroup",
                                       retention=logs.RetentionDays.THREE_MONTHS)
         workflows_api = _lambda.Function(
             self,

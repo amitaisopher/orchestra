@@ -19,12 +19,15 @@ The system includes:
 
 ### Components
 
-- **Workflow Dashboard**: React SPA hosted on S3 with automatic API configuration
-- **API Gateway**: RESTful API for workflow management
-- **Orchestrator Lambda**: Manages workflow state and dependency resolution
+- **Workflow Dashboard**: React SPA hosted on S3 with automatic API configuration and WebSocket connectivity
+- **API Gateway**: RESTful API for workflow management with WebSocket API for real-time updates
+- **WebSocket API**: AWS API Gateway v2 WebSocket for real-time workflow status broadcasting
+- **Orchestrator Lambda**: Manages workflow state, dependency resolution, and WebSocket broadcasting
 - **Worker Lambda**: Executes individual tasks with idempotency guarantees
 - **Task Lambdas (A, B1, B2, B3, C)**: Business logic functions
-- **DynamoDB Table**: Stores workflow state and task dependencies
+- **DynamoDB Tables**: 
+  - Stores workflow state and task dependencies
+  - Manages active WebSocket connections for real-time updates
 
 ### Deployment Stacks
 
@@ -32,14 +35,16 @@ The system uses a **two-stack deployment approach** to solve the "chicken and eg
 
 1. **ApiStack**: Deploys the backend API infrastructure first
    - API Gateway with Lambda proxy integration
+   - WebSocket API Gateway for real-time updates
    - Workflows API Lambda function
+   - WebSocket connection management Lambda
    - IAM roles and permissions
-   - Exports the API Gateway URL for the frontend stack
+   - Exports the API Gateway URL and WebSocket URL for the frontend stack
 
-2. **FrontendStack**: Deploys the frontend with automatic API configuration
-   - Builds the React application with a placeholder API URL
+2. **FrontendStack**: Deploys the frontend with automatic API and WebSocket configuration
+   - Requires pre-built React application (must run `npm run build` first)
    - Deploys static assets to S3 with website hosting
-   - Injects the real API URL via runtime configuration (config.js)
+   - Injects the real API URL and WebSocket URL via runtime configuration (config.js)
    - Depends on ApiStack to ensure proper deployment order
 
 ### Key Features
@@ -47,10 +52,80 @@ The system uses a **two-stack deployment approach** to solve the "chicken and eg
 - **Automated Deployment**: No manual .env file editing required
 - **Runtime Configuration**: Frontend automatically discovers API URL at runtime
 - **Web Dashboard**: Visual workflow management with DAG visualization
-- **Real-time Status**: Live workflow status updates
+- **Real-time Updates**: WebSocket-based live workflow status updates
+- **WebSocket Broadcasting**: Instant notifications for workflow and task status changes
 - **Idempotency**: Version-based optimistic locking prevents duplicate executions
 - **Concurrency Control**: Multiple workers can safely process tasks simultaneously
 - **Event-Driven**: Uses DynamoDB Streams for reactive coordination
+
+## Real-Time WebSocket Updates
+
+The system implements a comprehensive WebSocket-based real-time update mechanism that replaced the previous long polling approach:
+
+### WebSocket Architecture
+
+- **WebSocket API Gateway**: AWS API Gateway v2 WebSocket API for bidirectional communication
+- **Connection Management**: DynamoDB table stores active WebSocket connections
+- **Broadcasting System**: Orchestrator Lambda broadcasts workflow updates to all connected clients
+- **Automatic Reconnection**: Frontend automatically reconnects on connection loss
+- **Connection Cleanup**: Automatic removal of stale connections with proper error handling
+
+### WebSocket Features
+
+1. **Real-Time Workflow Updates**: Instant notifications when workflows start, complete, or fail
+2. **Task Status Broadcasting**: Live updates as individual tasks transition between states
+3. **Multi-Client Support**: Multiple browser tabs/users receive simultaneous updates
+4. **Connection State Management**: Visual indicators for WebSocket connection status
+5. **Graceful Degradation**: System continues to work if WebSocket connection fails
+
+### Implementation Details
+
+#### Backend WebSocket Components
+
+- **WebSocket Lambda Handler**: Manages connection lifecycle (connect/disconnect)
+- **Orchestrator Broadcasting**: Sends workflow updates to all connected clients
+- **Connection Table**: DynamoDB table tracking active WebSocket connections
+- **Message Format**: Structured JSON messages with workflow and task status data
+
+#### Frontend WebSocket Integration
+
+- **useWebSocket Hook**: React hook managing WebSocket connection and message handling
+- **Automatic Configuration**: WebSocket URL loaded from runtime configuration
+- **State Management**: Real-time updates integrated with React component state
+- **Error Handling**: Robust connection management with retry logic
+
+### WebSocket Message Format
+
+```json
+{
+  "type": "workflow_update",
+  "workflow_id": "wf-123456789",
+  "data": {
+    "workflow_id": "wf-123456789",
+    "status": "RUNNING",
+    "tasks": [
+      {
+        "taskId": "A",
+        "status": "SUCCEEDED",
+        "type": "node"
+      },
+      {
+        "taskId": "B1",
+        "status": "RUNNING",
+        "type": "node"
+      }
+    ]
+  }
+}
+```
+
+### Benefits Over Long Polling
+
+- **Reduced Latency**: Instant updates vs. polling intervals
+- **Lower Cost**: No continuous HTTP requests reducing Lambda invocations
+- **Better UX**: Real-time visual feedback in the DAG interface
+- **Scalability**: More efficient for multiple concurrent users
+- **Resource Efficiency**: Reduced server load and client-side polling overhead
 
 ## Prerequisites
 
@@ -140,7 +215,20 @@ cd ../..
 uv run cdk bootstrap
 ```
 
-### 4. Deploy Infrastructure
+### 4. Build Frontend Application
+
+Before deploying the frontend, you need to build the React application:
+
+```bash
+# Navigate to the frontend directory and build the React app
+cd web/workflow-dashboard
+npm run build
+cd ../..
+```
+
+This creates the `dist` folder with the production build that will be deployed to S3.
+
+### 5. Deploy Infrastructure
 
 The deployment uses a two-stack approach for optimal automation:
 
@@ -148,7 +236,7 @@ The deployment uses a two-stack approach for optimal automation:
 # Deploy the API stack first (backend infrastructure)
 uv run cdk deploy ApiStack
 
-# Deploy the frontend stack second (automatically configured with API URL)
+# Deploy the frontend stack second (uploads pre-built dist folder and configures API URLs)
 uv run cdk deploy FrontendStack
 
 # Or deploy both stacks at once (CDK handles dependencies)
@@ -156,20 +244,23 @@ uv run cdk deploy --all
 ```
 
 The deployment process:
-1. **ApiStack** deploys the backend API and exports the API Gateway URL
-2. **FrontendStack** automatically builds the React app and injects the correct API URL
-3. No manual configuration or .env file editing required
+1. **Frontend Build**: Manual step to create production build in `dist` folder
+2. **ApiStack** deploys the backend API and exports the API Gateway URL  
+3. **FrontendStack** uploads the pre-built React app and injects the correct API URLs
+4. No manual configuration or .env file editing required for API URLs
 
 ### 5. Access the Application
 
 After deployment, the CDK outputs will show:
 - **API Gateway URL**: For direct API access
+- **WebSocket URL**: For real-time updates (automatically configured)
 - **Frontend Dashboard URL**: For the web interface (S3 website hosting)
 
 Example output:
 ```
 Outputs:
 ApiStack.WorkflowsApiEndpoint = https://abc123.execute-api.eu-central-1.amazonaws.com/prod/
+OrchestrationStack.WebSocketApiUrl = wss://xyz789.execute-api.eu-central-1.amazonaws.com/prod
 FrontendStack.DashboardUrl = http://frontendstack-bucket.s3-website.eu-central-1.amazonaws.com
 ```
 
@@ -183,9 +274,10 @@ After deployment, access the workflow dashboard via the S3 website URL from the 
 2. **Automatic Configuration**: The frontend automatically loads the correct API URL at runtime
 
 The dashboard provides:
-- **Workflow List**: View all workflows and their current status
-- **Workflow Details**: Visual DAG representation of task dependencies
-- **Real-time Updates**: Live status updates as workflows execute
+- **Workflow List**: View all workflows and their current status with real-time updates
+- **Workflow Details**: Visual DAG representation of task dependencies with live status
+- **Real-time Updates**: WebSocket-based live status updates as workflows execute
+- **Connection Status**: Visual indicator showing WebSocket connection state
 - **Workflow Creation**: Start new workflows with auto-generated IDs
 
 ### API Endpoints
@@ -260,19 +352,20 @@ aws logs tail /aws/lambda/workflow-api --follow
 #### Building and Deploying
 
 ```bash
-# The build process is fully automated
-# Just deploy the stacks and everything is handled automatically
-
-cd /path/to/orchestra
+# Build the frontend application first
+cd web/workflow-dashboard
+npm run build
+cd ../..
 
 # Deploy both stacks (or individually as needed)
 uv run cdk deploy --all
 ```
 
-The deployment process automatically:
-1. **ApiStack**: Deploys backend infrastructure and exports API URL
-2. **FrontendStack**: Builds React app, uploads to S3, and injects runtime configuration
-3. **No manual steps**: Everything is automated including API URL configuration
+The deployment process requires:
+1. **Frontend Build**: Manual step to create production build with `npm run build`
+2. **ApiStack**: Deploys backend infrastructure and exports API URLs
+3. **FrontendStack**: Uploads pre-built React app to S3 and injects runtime configuration
+4. **Automated URL Configuration**: API and WebSocket URLs are injected automatically
 
 ### Monitoring Workflows
 
@@ -289,7 +382,7 @@ orchestra/
 │   ├── api/
 │   │   └── workflows_api.py          # REST API for workflow management
 │   ├── ddb_workflow/
-│   │   ├── orchestrator_lambda.py    # Workflow coordinator
+│   │   ├── orchestrator_lambda.py    # Workflow coordinator with WebSocket broadcasting
 │   │   ├── worker_lambda.py          # Task executor
 │   │   └── workflow_types.py         # Type definitions
 │   ├── lambdas/                      # Business logic functions
@@ -303,20 +396,22 @@ orchestra/
 │   └── stacks/
 │       ├── api_stack.py              # API infrastructure (API Gateway, Lambda)
 │       ├── frontend_stack.py         # Frontend deployment (S3, build automation)
-│       ├── orchestration_stack.py    # Lambda orchestration resources
+│       ├── orchestration_stack.py    # Lambda orchestration and WebSocket resources
 │       ├── payload_stack.py          # Shared resources (DynamoDB, ECR)
 │       └── monitoring_stack.py       # Monitoring resources
 ├── web/
-│   └── workflow-dashboard/           # React frontend
+│   └── workflow-dashboard/           # React frontend with WebSocket integration
 │       ├── src/
 │       │   ├── components/
-│       │   │   ├── WorkflowGraph.tsx # DAG visualization
-│       │   │   └── WorkflowList.tsx  # Workflow list view
+│       │   │   ├── WorkflowGraph.tsx # DAG visualization with real-time updates
+│       │   │   └── WorkflowList.tsx  # Workflow list view with WebSocket updates
+│       │   ├── hooks/
+│       │   │   └── useWebSocket.ts   # WebSocket connection management hook
 │       │   ├── services/
 │       │   │   └── api.ts            # API client
-│       │   └── App.tsx               # Main React app
+│       │   └── App.tsx               # Main React app with WebSocket integration
 │       ├── public/
-│       │   └── config.js             # Runtime configuration template
+│       │   └── config.js             # Runtime configuration template (API + WebSocket URLs)
 │       ├── package.json
 │       └── vite.config.ts
 ├── tools/
@@ -341,19 +436,23 @@ The system solves the "chicken and egg" problem where the frontend needs the API
 
 2. **FrontendStack Deployment**:
    - Depends on ApiStack (automatic dependency resolution by CDK)
-   - Builds React application with placeholder API URL
+   - Uploads pre-built React application from the `dist` folder
    - Deploys static assets to S3 with website hosting
-   - Injects real API URL via runtime configuration file (config.js)
+   - Injects real API URL and WebSocket URL via runtime configuration file (config.js)
    - Frontend loads API URL at runtime, not build time
+
+**Important**: The FrontendStack expects a pre-built React application in the `web/workflow-dashboard/dist` folder. You must run `npm run build` in the frontend directory before deploying the FrontendStack.
 
 ### Event-Driven Orchestration
 
 1. **API Request**: User creates workflow via web dashboard or API
-2. **Initialization**: Orchestrator seeds workflow graph in DynamoDB
-3. **Task Execution**: Worker Lambda executes tasks with version-based locking
-4. **Dependency Resolution**: DynamoDB Streams trigger fan-out when tasks complete
-5. **State Management**: Conditional updates ensure exactly-once execution
-6. **Real-time Updates**: API provides current status for dashboard display
+2. **WebSocket Connection**: Frontend establishes WebSocket connection for real-time updates
+3. **Initialization**: Orchestrator seeds workflow graph in DynamoDB
+4. **Task Execution**: Worker Lambda executes tasks with version-based locking
+5. **Dependency Resolution**: DynamoDB Streams trigger fan-out when tasks complete
+6. **WebSocket Broadcasting**: Orchestrator broadcasts status updates to all connected clients
+7. **State Management**: Conditional updates ensure exactly-once execution
+8. **Real-time UI Updates**: Frontend receives WebSocket messages and updates DAG visualization
 
 ### Workflow States
 
@@ -454,17 +553,22 @@ npm test
 # 1. Deploy backend infrastructure first
 uv run cdk deploy ApiStack
 
-# 2. Deploy frontend (automatically gets API URL from ApiStack)
+# 2. Build the frontend application
+cd web/workflow-dashboard
+npm run build
+cd ../..
+
+# 3. Deploy frontend (uploads pre-built dist folder and gets API URLs from ApiStack)
 uv run cdk deploy FrontendStack
 
-# 3. Get frontend URL from CDK outputs and access dashboard
-# No environment variable configuration needed - everything is automatic
+# 4. Get frontend URL from CDK outputs and access dashboard
+# API and WebSocket URLs are automatically injected - no environment variable configuration needed
 
-# 4. For local development with hot reload:
+# 5. For local development with hot reload:
 cd web/workflow-dashboard
 npm run dev
 
-# 5. Access local dashboard at http://localhost:5173
+# 6. Access local dashboard at http://localhost:5173
 # Local dashboard will use the deployed API from step 1
 ```
 
@@ -476,12 +580,15 @@ The system uses the following environment variables:
 
 #### Backend (Lambda)
 - `TABLE_NAME`: DynamoDB table name (set by CDK)
+- `CONNECTIONS_TABLE`: WebSocket connections table name (set by CDK)
 - `WORKER_ARN`: Worker Lambda ARN (set by CDK)
 - `ORCHESTRATOR_ARN`: Orchestrator Lambda ARN (set by CDK)
+- `WEBSOCKET_API_ENDPOINT`: WebSocket API Gateway endpoint for broadcasting (set by CDK)
 
 #### Frontend (React)
-- **Runtime Configuration**: API URL loaded from `/config.js` at runtime
+- **Runtime Configuration**: API URL and WebSocket URL loaded from `/config.js` at runtime
 - `VITE_API_BASE`: Fallback API URL for development (optional)
+- `VITE_WEBSOCKET_URL`: Fallback WebSocket URL for development (optional)
 
 #### Development
 - `AWS_REGION`: AWS region for deployment
@@ -507,16 +614,43 @@ The CDK application can be configured via `cdk.json`:
 
 1. **Frontend Not Loading API Configuration**: 
    ```bash
-   # Check that config.js is properly deployed
+   # Check that config.js is properly deployed with both API and WebSocket URLs
    curl http://your-frontend-url.s3-website.region.amazonaws.com/config.js
    
-   # Should return: window.API_BASE = 'https://your-api-url.amazonaws.com/prod';
+   # Should return: 
+   # window.API_BASE = 'https://your-api-url.amazonaws.com/prod';
+   # window.WEBSOCKET_URL = 'wss://your-websocket-url.amazonaws.com/prod';
+   ```
+
+2. **WebSocket Connection Issues**:
+   ```bash
+   # Check WebSocket API Gateway in AWS console
+   # Verify WebSocket Lambda function has proper permissions
+   # Check CloudWatch logs for WebSocket connection errors
+   aws logs tail /aws/lambda/websocket-handler --follow
+   
+   # Test WebSocket endpoint manually (requires wscat)
+   npm install -g wscat
+   wscat -c wss://your-websocket-id.execute-api.region.amazonaws.com/prod
+   ```
+
+3. **Real-time Updates Not Working**:
+   ```bash
+   # Check orchestrator Lambda logs for broadcasting errors
+   aws logs tail /aws/lambda/orchestrator --follow
+   
+   # Verify connections table has active connections
+   aws dynamodb scan --table-name WebSocketConnections --region your-region
+   
+   # Check browser console for WebSocket errors
+   # Verify WebSocket connection status in dashboard UI
    ```
 
 2. **CORS Errors in Frontend**: 
    ```bash
    # Verify API Gateway CORS configuration in AWS console
    # Check that frontend domain is allowed in CORS settings
+   # WebSocket CORS is handled differently - check WebSocket API configuration
    ```
 
 2. **Frontend Build Issues**:
@@ -538,13 +672,38 @@ The CDK application can be configured via `cdk.json`:
    ```bash
    # If FrontendStack fails due to missing API URL:
    uv run cdk deploy ApiStack
+   
+   # Build the frontend before deploying FrontendStack:
+   cd web/workflow-dashboard
+   npm run build
+   cd ../..
+   
    uv run cdk deploy FrontendStack
    
-   # Or use --all flag for automatic dependency resolution
+   # Or use --all flag for automatic dependency resolution (after building frontend)
    uv run cdk deploy --all
    ```
 
-4. **Lambda Import Errors**: Ensure absolute imports in Lambda functions
+4. **Frontend Build Missing**:
+   ```bash
+   # If FrontendStack fails because dist folder doesn't exist:
+   cd web/workflow-dashboard
+   
+   # Ensure dependencies are installed
+   npm install
+   
+   # Build the React application
+   npm run build
+   
+   # Verify dist folder was created
+   ls -la dist/
+   
+   # Return to project root and deploy
+   cd ../..
+   uv run cdk deploy FrontendStack
+   ```
+
+5. **Lambda Import Errors**: Ensure absolute imports in Lambda functions
    ```python
    # Good
    from ddb_workflow.workflow_types import TaskExecutionRequest
@@ -553,18 +712,18 @@ The CDK application can be configured via `cdk.json`:
    from .workflow_types import TaskExecutionRequest
    ```
 
-5. **Permission Errors**: Verify IAM roles have necessary permissions
+6. **Permission Errors**: Verify IAM roles have necessary permissions
    - DynamoDB read/write access
    - Lambda invoke permissions
    - CloudWatch Logs access
    - S3 read access for static hosting
 
-6. **API Gateway 502 Errors**: Check Lambda function logs
+7. **API Gateway 502 Errors**: Check Lambda function logs
    ```bash
    aws logs tail /aws/lambda/workflow-api --follow
    ```
 
-7. **S3 Website Access Issues**: 
+8. **S3 Website Access Issues**: 
    ```bash
    # Check S3 bucket website configuration
    aws s3api get-bucket-website --bucket your-frontend-bucket-name
@@ -577,8 +736,25 @@ The CDK application can be configured via `cdk.json`:
 1. **Frontend Issues**: 
    ```bash
    # Check browser console for errors
-   # Inspect Network tab for API calls
+   # Inspect Network tab for API calls and WebSocket connections
    # Verify config.js loads correctly: /config.js endpoint
+   # Check WebSocket connection status indicator in UI
+   # Monitor WebSocket messages in browser dev tools (Network > WS tab)
+   ```
+
+2. **WebSocket Issues**:
+   ```bash
+   # Check WebSocket Lambda logs
+   aws logs tail /aws/lambda/websocket-handler --follow
+   
+   # Check orchestrator WebSocket broadcasting logs
+   aws logs tail /aws/lambda/orchestrator --follow | grep "broadcast"
+   
+   # Verify WebSocket API Gateway configuration
+   aws apigatewayv2 get-apis --region your-region
+   
+   # Check connections table for active connections
+   aws dynamodb scan --table-name WebSocketConnections
    ```
 
 2. **Backend API Issues**:
@@ -658,12 +834,17 @@ aws dynamodb scan --table-name YourTableName --region your-region
 ### End-to-End Testing
 
 ```bash
-# 1. Deploy both stacks
+# 1. Build the frontend application
+cd web/workflow-dashboard
+npm run build
+cd ../..
+
+# 2. Deploy both stacks
 uv run cdk deploy --all
 
-# 2. Get the frontend URL from FrontendStack outputs
-# 3. Open the dashboard in browser
-# 4. Create a workflow and verify:
+# 3. Get the frontend URL from FrontendStack outputs
+# 4. Open the dashboard in browser
+# 5. Create a workflow and verify:
 #    - Workflow appears in list
 #    - Tasks execute in correct order
 #    - Status updates in real-time

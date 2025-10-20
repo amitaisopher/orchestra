@@ -50,7 +50,7 @@ monitoring.add_dependency(orchestration)
 monitoring.add_dependency(payload)
 
 
-# Stack 1: API (must be deployed first)
+# Stack 1: API (depends on orchestration)
 api_stack = ApiStack(
     app,
     "ApiStack",
@@ -58,17 +58,20 @@ api_stack = ApiStack(
     workflow_state_table=payload.workflow_state_table,
     orchestrator_fn=orchestration.orchestrator,
 )
+api_stack.add_dependency(orchestration)
 
-# Stack 2: Frontend (depends on API stack)
+# Stack 2: Frontend (depends on API and orchestration stacks)
 frontend_stack = FrontendStack(
     app,
     "FrontendStack",
     env=env,
     api_url=api_stack.api_url,
+    websocket_url=orchestration.websocket_url,
 )
 
-# Ensure frontend stack depends on API stack
+# Ensure frontend stack depends on both stacks
 frontend_stack.add_dependency(api_stack)
+frontend_stack.add_dependency(orchestration)
 
 
 app.synth()

@@ -17,6 +17,7 @@ class FrontendStack(Stack):
         construct_id: str,
         *,
         api_url: str,
+        websocket_url: str,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -46,10 +47,11 @@ class FrontendStack(Stack):
             "WorkflowDashboardDeploy",
             sources=[
                 s3deploy.Source.asset(str(FRONTEND_ROOT / "dist")),
-                # Replace the placeholder config.js with the real API URL
+                # Replace the placeholder config.js with the real API and WebSocket URLs
                 s3deploy.Source.data(
                     "config.js",
-                    f"window.API_BASE = '{api_url.rstrip('/')}';",
+                    f"window.API_BASE = '{api_url.rstrip('/')}'; "
+                    f"window.WEBSOCKET_URL = '{websocket_url}';",
                 ),
             ],
             destination_bucket=site_bucket,

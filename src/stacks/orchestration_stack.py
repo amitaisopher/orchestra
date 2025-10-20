@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aws_cdk import CfnOutput, Duration, Stack
+from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
+from aws_cdk import aws_apigatewayv2 as apigwv2
+from aws_cdk import aws_apigatewayv2_integrations as apigwv2_integrations
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_ecr as ecr
 from aws_cdk import aws_iam as iam
@@ -283,6 +285,102 @@ class OrchestrationStack(Stack):
             ),
         )
 
+        # === WebSocket API for real-time updates ===
+
+        # DynamoDB table for WebSocket connections
+        connections_table = dynamodb.Table(
+            self,
+            "WebSocketConnections",
+            partition_key=dynamodb.Attribute(
+                name="connectionId",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=(
+                RemovalPolicy.DESTROY
+                if self.node.try_get_context("remove_on_delete")
+                else RemovalPolicy.RETAIN
+            ),
+        )
+
+        # WebSocket Lambda function
+        websocket_lambda = _lambda.Function(
+            self,
+            "WebSocketLambda",
+            code=_lambda.Code.from_asset(str(ROOT / "src")),
+            handler="api.websocket_api.handler",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            timeout=Duration.seconds(30),
+            environment={
+                "CONNECTIONS_TABLE": connections_table.table_name,
+                "TABLE_NAME": workflow_state_table.table_name,
+            },
+            log_group=logs.LogGroup(
+                self,
+                "WebSocketLogGroup",
+                retention=logs.RetentionDays.THREE_MONTHS,
+            ),
+            tracing=_lambda.Tracing.ACTIVE,
+        )
+        _attach_logs_policy(websocket_lambda)
+
+        # WebSocket API Gateway v2
+        websocket_api = apigwv2.WebSocketApi(
+            self,
+            "WebSocketApi",
+            connect_route_options=apigwv2.WebSocketRouteOptions(
+                integration=apigwv2_integrations.WebSocketLambdaIntegration(
+                    "ConnectIntegration",
+                    websocket_lambda,
+                ),
+            ),
+            disconnect_route_options=apigwv2.WebSocketRouteOptions(
+                integration=apigwv2_integrations.WebSocketLambdaIntegration(
+                    "DisconnectIntegration",
+                    websocket_lambda,
+                ),
+            ),
+        )
+
+        # WebSocket stage
+        websocket_stage = apigwv2.WebSocketStage(
+            self,
+            "WebSocketStage",
+            web_socket_api=websocket_api,
+            stage_name="prod",
+            auto_deploy=True,
+        )
+
+        # Grant permissions for WebSocket
+        connections_table.grant_read_write_data(websocket_lambda)
+        workflow_state_table.grant_read_data(websocket_lambda)
+
+        websocket_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["execute-api:ManageConnections"],
+                resources=[
+                    f"arn:aws:execute-api:{self.region}:{self.account}:{websocket_api.api_id}/*"],
+            ),
+        )
+
+        # Configure orchestrator with WebSocket environment variables
+        orchestrator.add_environment("WEBSOCKET_API_URL", websocket_stage.url)
+        orchestrator.add_environment(
+            "CONNECTIONS_TABLE_NAME", connections_table.table_name)
+
+        # Grant orchestrator permissions to manage WebSocket connections
+        connections_table.grant_read_write_data(orchestrator)
+        orchestrator.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["execute-api:ManageConnections"],
+                resources=[
+                    f"arn:aws:execute-api:{self.region}:{self.account}:{websocket_api.api_id}/*"],
+            ),
+        )
+
+        # Store for other stacks
+        self.websocket_url = websocket_stage.url
+
         # === Outputs ===
         CfnOutput(self, "LambdaAName", value=lambda_a.function_name,
                   export_name=f"{self.stack_name}-LambdaA-Name")
@@ -301,3 +399,5 @@ class OrchestrationStack(Stack):
                   export_name=f"{self.stack_name}-Worker-Name")
         CfnOutput(self, "StateMachineArn", value=self.state_machine.state_machine_arn,
                   export_name=f"{self.stack_name}-StateMachine-Arn")
+        CfnOutput(self, "WebSocketApiUrl", value=self.websocket_url,
+                  export_name=f"{self.stack_name}-WebSocketApi-Url")

@@ -58,15 +58,45 @@ def _post_workflows(event: dict[str, Any]) -> dict[str, Any]:
         data = json.loads(event.get("body") or "{}")
     except json.JSONDecodeError:
         return _resp(400, {"error": "Invalid JSON"})
+
     workflow_id = (data.get("workflowId") or "").strip()
     if not workflow_id:
         return _resp(400, {"error": "workflowId is required"})
-    payload: dict[str, Any] = {"mode": "start", "workflowId": workflow_id}
-    if isinstance(data.get("lambdas"), dict):
-        payload["lambdas"] = data["lambdas"]
-    _lambda.invoke(FunctionName=ORCHESTRATOR_ARN, InvocationType="RequestResponse",
-                   Payload=json.dumps(payload).encode("utf-8"))
-    return _resp(202, {"ok": True, "workflowId": workflow_id})
+
+    try:
+        payload: dict[str, Any] = {"mode": "start", "workflowId": workflow_id}
+        if isinstance(data.get("lambdas"), dict):
+            payload["lambdas"] = data["lambdas"]
+
+        print(f"Invoking orchestrator for workflow {workflow_id}")
+        print(f"Payload: {json.dumps(payload)}")
+
+        response = _lambda.invoke(
+            FunctionName=ORCHESTRATOR_ARN,
+            InvocationType="RequestResponse",
+            Payload=json.dumps(payload).encode("utf-8"),
+        )
+
+        print(f"Orchestrator response: {response}")
+
+        # Check for errors in the orchestrator response
+        if response.get("FunctionError"):
+            error_payload = response.get("Payload", b"").read().decode("utf-8")
+            print(
+                f"Orchestrator error for workflow {workflow_id}: {error_payload}")
+            return _resp(500, {"error": f"Failed to start workflow: {error_payload}"})
+
+        # Read and log the response payload
+        response_payload = response.get("Payload", b"").read().decode("utf-8")
+        print(f"Orchestrator response payload: {response_payload}")
+
+        print(f"Successfully invoked orchestrator for workflow {workflow_id}")
+        return _resp(202, {"ok": True, "workflowId": workflow_id})
+
+    except Exception as e:
+        print(
+            f"Error invoking orchestrator for workflow {workflow_id}: {str(e)}")
+        return _resp(500, {"error": f"Failed to start workflow: {str(e)}"})
 
 
 def _get_workflows() -> dict[str, Any]:

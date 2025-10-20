@@ -3,11 +3,28 @@ import {ReactFlow,  Background, Controls, MiniMap } from '@xyflow/react'
 import '@xyflow/react/dist/style.css';
 
 export default function WorkflowGraph({ workflow }:{ workflow:any|null }) {
-  const dag = workflow?.dag ?? { A:['B1','B2','B3'], B1:['C'], B2:['C'], B3:['C'], C:[] }
-  const tasks:any[] = workflow?.tasks ?? []
-  const statusMap = new Map(tasks.map((t:any) => [t.taskId, t.status]))
+  const dag = useMemo(() => 
+    workflow?.dag ?? { A:['B1','B2','B3'], B1:['C'], B2:['C'], B3:['C'], C:[] }
+  , [workflow?.dag])
+  
+  const tasks = useMemo(() => 
+    Array.isArray(workflow?.tasks) ? workflow.tasks : []
+  , [workflow?.tasks])
+  
+  const statusMap = useMemo(() => {
+    const map = new Map<string, string>()
+    tasks.forEach((t: any) => {
+      if (t?.taskId && t?.status) {
+        map.set(String(t.taskId), String(t.status))
+      }
+    })
+    return map
+  }, [tasks])
   const nodes = useMemo(() => {
+    if (!dag || typeof dag !== 'object') return []
+    
     const all = Object.keys(dag)
+    if (all.length === 0) return []
     
     // Create a simple vertical layout based on DAG levels
     const levels = new Map<string, number>()
@@ -71,23 +88,29 @@ export default function WorkflowGraph({ workflow }:{ workflow:any|null }) {
         draggable: true
       }
     })
-  }, [dag, tasks])
+  }, [dag, statusMap])
   const edges = useMemo(() => {
+    if (!dag || typeof dag !== 'object') return []
+    
     const out:any[] = []; 
-    Object.entries(dag).forEach(([from, tos]) => 
-      (tos as string[]).forEach(to => 
-        out.push({ 
-          id:`${from}-${to}`, 
-          source:from, 
-          target:to,
-          style: { stroke: '#333', strokeWidth: 2 },
-          markerEnd: {
-            type: 'arrowclosed',
-            color: '#333'
+    Object.entries(dag).forEach(([from, tos]) => {
+      if (Array.isArray(tos)) {
+        tos.forEach(to => {
+          if (to && from) {
+            out.push({ 
+              id:`${from}-${to}`, 
+              source:from, 
+              target:to,
+              style: { stroke: '#333', strokeWidth: 2 },
+              markerEnd: {
+                type: 'arrowclosed',
+                color: '#333'
+              }
+            })
           }
         })
-      )
-    )
+      }
+    })
     return out
   }, [dag])
   return (
