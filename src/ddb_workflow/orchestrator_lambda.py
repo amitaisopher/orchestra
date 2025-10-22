@@ -418,7 +418,11 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         if not dependents_csv:
             continue
         dependents = [x for x in dependents_csv.split(",") if x]
-        # Decrement remainingDeps on each dependent; when it hits 0, mark READY and trigger worker
+
+        # Collect tasks that become ready for concurrent execution
+        tasks_to_execute = []
+
+        # Decrement remainingDeps on each dependent; collect tasks ready for execution
         for dep in dependents:
             # Atomically decrement remainingDeps if > 0
             try:
@@ -451,38 +455,56 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                             ReturnValues="ALL_NEW",
                         )
 
-                        # Update workflow status when task becomes ready
-                        _update_workflow_status(workflow_id)
-
-                        # Broadcast WebSocket update when task becomes ready
-                        try:
-                            workflow_data = _get_workflow_state(workflow_id)
-                            _broadcast_workflow_update(
-                                workflow_id, workflow_data)
-                        except Exception as e:
-                            print(
-                                f"Error broadcasting workflow update for {workflow_id}: {e}")
-
                         new_vals_ready = resp.get("Attributes", {})
                         dep_target = new_vals_ready.get(
                             "targetLambdaArn", {}).get("S")
                         dep_version = int(new_vals_ready.get(
                             "version", {}).get("N", "0"))
-                        _invoke_worker(
-                            TaskExecutionRequest(
-                                workflowId=workflow_id,
-                                taskId=dep,
-                                targetLambdaArn=dep_target,
-                                expectedVersion=dep_version,
-                                deadlineMs=15000,
-                                correlationId=workflow_id,
-                            ),
-                        )
+
+                        # Collect task for concurrent execution instead of executing immediately
+                        tasks_to_execute.append(TaskExecutionRequest(
+                            workflowId=workflow_id,
+                            taskId=dep,
+                            targetLambdaArn=dep_target,
+                            expectedVersion=dep_version,
+                            deadlineMs=15000,
+                            correlationId=workflow_id,
+                        ))
+
+                        print(
+                            f"Task {dep} is now READY and queued for execution")
+
                     except ClientError as e:
                         if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
                             pass
             except ClientError as e:
                 if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
                     pass
+
+        # Execute all ready tasks concurrently (outside the dependency resolution loop)
+        if tasks_to_execute:
+            task_ids = [task['taskId'] for task in tasks_to_execute]
+            print(
+                f"Executing {len(tasks_to_execute)} tasks concurrently: {task_ids}")
+
+            # Update workflow status once before executing tasks
+            _update_workflow_status(workflow_id)
+
+            # Broadcast WebSocket update for all tasks becoming ready
+            try:
+                workflow_data = _get_workflow_state(workflow_id)
+                _broadcast_workflow_update(workflow_id, workflow_data)
+            except Exception as e:
+                print(
+                    f"Error broadcasting workflow update for {workflow_id}: {e}")
+
+            # Invoke all workers concurrently
+            for task_req in tasks_to_execute:
+                try:
+                    _invoke_worker(task_req)
+                    print(f"Invoked worker for task {task_req['taskId']}")
+                except Exception as e:
+                    print(
+                        f"Error invoking worker for task {task_req['taskId']}: {e}")
 
     return {"ok": True}
