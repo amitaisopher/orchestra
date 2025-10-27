@@ -69,6 +69,39 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             Payload=json.dumps(
                 {"workflowId": workflow_id, "taskId": task_id}).encode("utf-8"),
         )
+
+        # Check if the target lambda executed successfully
+        if resp.get("FunctionError"):
+            payload = resp.get("Payload")
+            error_payload = json.loads(
+                payload.read().decode("utf-8")) if payload else {}
+            error_message = json.dumps({
+                "message": "Target lambda failed",
+                "error": error_payload,
+            })
+            # Mark task as FAILED
+            ddb.update_item(
+                TableName=_get_table_name(),
+                Key={"pk": {"S": _pk(workflow_id)}, "sk": {
+                    "S": _sk_task(task_id)}},
+                UpdateExpression="SET #s = :failed, error = :err",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={
+                    ":failed": {"S": "FAILED"},
+                    ":err": {"S": error_message},
+                },
+            )
+            # Mark workflow as FAILED
+            ddb.update_item(
+                TableName=_get_table_name(),
+                Key={"pk": {"S": _pk(workflow_id)}, "sk": {
+                    "S": _pk(workflow_id)}},
+                UpdateExpression="SET #s = :failed",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":failed": {"S": "FAILED"}},
+            )
+            return {"ok": False, "status": "FAILED", "error": error_message}
+
         payload = resp.get("Payload")
         result = json.loads(payload.read().decode("utf-8")) if payload else {}
         duration_ms = int((time.time() - start) * 1000)
@@ -86,6 +119,8 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         )
         return {"ok": True, "status": "SUCCEEDED", "durationMs": duration_ms}
     except Exception as exc:  # noqa: BLE001
+        error_message = json.dumps({"message": str(exc)})
+        # Mark task as FAILED
         ddb.update_item(
             TableName=_get_table_name(),
             Key={"pk": {"S": _pk(workflow_id)}, "sk": {
@@ -94,7 +129,16 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
                 ":failed": {"S": "FAILED"},
-                ":err": {"S": json.dumps({"message": str(exc)})},
+                ":err": {"S": error_message},
             },
+        )
+        # Mark workflow as FAILED
+        ddb.update_item(
+            TableName=_get_table_name(),
+            Key={"pk": {"S": _pk(workflow_id)}, "sk": {
+                "S": _pk(workflow_id)}},
+            UpdateExpression="SET #s = :failed",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":failed": {"S": "FAILED"}},
         )
         return {"ok": False, "status": "FAILED", "error": str(exc)}
